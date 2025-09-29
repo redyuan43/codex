@@ -89,7 +89,7 @@ impl EventProcessorWithHumanOutput {
                 green: Style::new().green(),
                 cyan: Style::new().cyan(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
-                show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                show_raw_agent_reasoning: true, // Always show raw reasoning for better thinking display
                 answer_started: false,
                 reasoning_started: false,
                 raw_reasoning_started: false,
@@ -107,7 +107,7 @@ impl EventProcessorWithHumanOutput {
                 green: Style::new(),
                 cyan: Style::new(),
                 show_agent_reasoning: !config.hide_agent_reasoning,
-                show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+                show_raw_agent_reasoning: true, // Always show raw reasoning for better thinking display
                 answer_started: false,
                 reasoning_started: false,
                 raw_reasoning_started: false,

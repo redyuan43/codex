@@ -2096,15 +2096,15 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
-                if sess.show_raw_agent_reasoning() {
-                    let event = Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::AgentReasoningRawContentDelta(
-                            AgentReasoningRawContentDeltaEvent { delta },
-                        ),
-                    };
-                    sess.send_event(event).await;
-                }
+                // Always show reasoning content for better user experience
+                // This ensures thinking process is displayed for all models that support it
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentReasoningRawContentDelta(
+                        AgentReasoningRawContentDeltaEvent { delta },
+                    ),
+                };
+                sess.send_event(event).await;
             }
         }
     }
