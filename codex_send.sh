@@ -34,7 +34,7 @@ REQUEST_BODY="$(jq -n --arg threadId "$THREAD_ID" --arg message "$MESSAGE" \
   '{threadId:$threadId, message:$message}')"
 
 if [ "$PRETTY" -eq 1 ]; then
-  curl -N -X POST "${BASE_URL}/turn/start" \
+  curl -sS -N -X POST "${BASE_URL}/turn/start" \
     -H "Content-Type: application/json" \
     -d "$REQUEST_BODY" \
   | sed -n 's/^data: //p' \
@@ -43,7 +43,7 @@ if [ "$PRETTY" -eq 1 ]; then
       elif .method=="codex/event/task_complete" then "\n\n" + .params.msg.last_agent_message
       else empty end'
 else
-  curl -N -X POST "${BASE_URL}/turn/start" \
+  curl -sS -N -X POST "${BASE_URL}/turn/start" \
     -H "Content-Type: application/json" \
     -d "$REQUEST_BODY"
 fi
