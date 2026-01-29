@@ -1140,11 +1140,14 @@ name = "codex-app-server-test-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "codex-app-server-protocol",
  "codex-protocol",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-stream",
  "uuid",
 ]
 
