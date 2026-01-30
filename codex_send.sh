@@ -38,9 +38,9 @@ if [ "$PRETTY" -eq 1 ]; then
     -H "Content-Type: application/json" \
     -d "$REQUEST_BODY" \
   | sed -n 's/^data: //p' \
-  | jq -r '
+  | jq -rj '
       if .method=="item/agentMessage/delta" then .params.delta
-      elif .method=="codex/event/task_complete" then "\n\n" + .params.msg.last_agent_message
+      elif .method=="codex/event/task_complete" then "\n\n" + .params.msg.last_agent_message + "\n"
       else empty end'
 else
   curl -sS -N -X POST "${BASE_URL}/turn/start" \
