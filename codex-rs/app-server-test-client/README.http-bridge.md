@@ -24,6 +24,7 @@ cargo run -p codex-app-server-test-client --bin http_bridge -- \
 - `POST /thread/start`
 - `POST /thread/resume`
 - `POST /turn/start` (SSE stream)
+- `POST /tool/answer`
 
 ## Usage (curl)
 
@@ -64,6 +65,21 @@ and the data is the JSON-encoded notification. Example events:
 - `item/started`
 - `item/agentMessage/delta`
 - `turn/completed`
+- `item/tool/requestUserInput`
+
+If you receive `item/tool/requestUserInput`, answer it with:
+
+```bash
+curl -s -X POST http://127.0.0.1:7000/tool/answer \
+  -H "Content-Type: application/json" \
+  -d '{
+    "requestId":"<request_id_from_event>",
+    "answers":{
+      "question-id-1":["your answer"],
+      "question-id-2":["choice A","choice B"]
+    }
+  }'
+```
 
 ## Notes
 

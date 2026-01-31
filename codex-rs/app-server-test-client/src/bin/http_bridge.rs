@@ -95,6 +95,7 @@ async fn main() -> Result<()> {
         .route("/thread/start", post(thread_start))
         .route("/thread/resume", post(thread_resume))
         .route("/turn/start", post(turn_start))
+        .route("/tool/answer", post(tool_answer))
         .with_state(state);
 
     let addr: SocketAddr = cli.listen.parse().context("invalid listen address")?;
@@ -115,8 +116,17 @@ struct AppState {
 struct CodexAppServer {
     stdin: Mutex<ChildStdin>,
     pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<Value, String>>>>,
-    notifications_tx: broadcast::Sender<JSONRPCNotification>,
+    events_tx: broadcast::Sender<BridgeEvent>,
     _child: Mutex<Child>,
+}
+
+#[derive(Clone, Debug)]
+enum BridgeEvent {
+    Notification(JSONRPCNotification),
+    ToolRequest {
+        request_id: RequestId,
+        params: codex_app_server_protocol::ToolRequestUserInputParams,
+    },
 }
 
 impl CodexAppServer {
@@ -143,12 +153,12 @@ impl CodexAppServer {
             .take()
             .context("codex app-server stdout unavailable")?;
 
-        let (notifications_tx, _notifications_rx) = broadcast::channel(256);
+        let (events_tx, _events_rx) = broadcast::channel(256);
 
         let server = Arc::new(Self {
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
-            notifications_tx,
+            events_tx,
             _child: Mutex::new(child),
         });
 
@@ -217,7 +227,9 @@ impl CodexAppServer {
                         }
                     }
                     JSONRPCMessage::Notification(notification) => {
-                        let _ = server.notifications_tx.send(notification);
+                        let _ = server
+                            .events_tx
+                            .send(BridgeEvent::Notification(notification));
                     }
                     JSONRPCMessage::Request(request) => {
                         if let Err(err) = server.handle_server_request(request) {
@@ -278,8 +290,8 @@ impl CodexAppServer {
         self.send_request(request, request_id, "turn/start").await
     }
 
-    fn subscribe(&self) -> broadcast::Receiver<JSONRPCNotification> {
-        self.notifications_tx.subscribe()
+    fn subscribe(&self) -> broadcast::Receiver<BridgeEvent> {
+        self.events_tx.subscribe()
     }
 
     async fn send_request<T>(
@@ -319,6 +331,11 @@ impl CodexAppServer {
             }
             ServerRequest::FileChangeRequestApproval { request_id, params } => {
                 self.handle_file_change_request_approval(request_id, params)?;
+            }
+            ServerRequest::ToolRequestUserInput { request_id, params } => {
+                let _ = self
+                    .events_tx
+                    .send(BridgeEvent::ToolRequest { request_id, params });
             }
             _ => {}
         }
@@ -424,6 +441,13 @@ struct TurnStartRequest {
     message: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolAnswerRequest {
+    request_id: Value,
+    answers: HashMap<String, Vec<String>>,
+}
+
 async fn initialize(State(state): State<AppState>) -> Result<Json<InitializeResponse>, AppError> {
     let response = state.server.initialize().await?;
     Ok(Json(response))
@@ -498,22 +522,44 @@ async fn turn_start(
         .await
         .ok();
 
-    let mut notifications = BroadcastStream::new(state.server.subscribe());
+    let mut events = BroadcastStream::new(state.server.subscribe());
     tokio::spawn(async move {
-        while let Some(item) = notifications.next().await {
+        while let Some(item) = events.next().await {
             let Ok(notification) = item else {
                 break;
             };
 
-            let method = notification.method.clone();
-            let payload = serde_json::to_string(&notification)
-                .unwrap_or_else(|_| "{\"error\":\"failed to serialize notification\"}".to_string());
+            let (method, payload, done) = match notification {
+                BridgeEvent::Notification(notification) => {
+                    let method = notification.method.clone();
+                    let payload = serde_json::to_string(&notification).unwrap_or_else(|_| {
+                        "{\"error\":\"failed to serialize notification\"}".to_string()
+                    });
+                    let done = is_turn_completed(&notification, &thread_id, &turn_id);
+                    (method, payload, done)
+                }
+                BridgeEvent::ToolRequest { request_id, params } => {
+                    let payload = serde_json::json!({
+                        "method": "item/tool/requestUserInput",
+                        "id": request_id,
+                        "params": params,
+                    });
+                    (
+                        "item/tool/requestUserInput".to_string(),
+                        serde_json::to_string(&payload).unwrap_or_else(|_| {
+                            "{\"error\":\"failed to serialize tool request\"}".to_string()
+                        }),
+                        false,
+                    )
+                }
+            };
+
             let event = Event::default().event(method).data(payload);
             if tx.send(Ok(event)).await.is_err() {
                 break;
             }
 
-            if is_turn_completed(&notification, &thread_id, &turn_id) {
+            if done {
                 break;
             }
         }
@@ -533,4 +579,27 @@ fn is_turn_completed(notification: &JSONRPCNotification, thread_id: &str, turn_i
         }
         _ => false,
     }
+}
+
+async fn tool_answer(
+    State(state): State<AppState>,
+    Json(request): Json<ToolAnswerRequest>,
+) -> Result<StatusCode, AppError> {
+    let request_id: RequestId =
+        serde_json::from_value(request.request_id).context("invalid requestId")?;
+    let answers = request
+        .answers
+        .into_iter()
+        .map(|(id, answers)| {
+            (
+                id,
+                codex_app_server_protocol::ToolRequestUserInputAnswer { answers },
+            )
+        })
+        .collect();
+    let response = codex_app_server_protocol::ToolRequestUserInputResponse { answers };
+    state
+        .server
+        .send_server_request_response(request_id, &response)?;
+    Ok(StatusCode::NO_CONTENT)
 }
