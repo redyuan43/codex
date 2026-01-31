@@ -152,6 +152,30 @@
         display: grid;
         gap: 8px;
       }
+      .wait-panel {
+        display: none;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        border: 1px solid #eee;
+        border-radius: 8px;
+        background: #fafafa;
+      }
+      .wait-panel.active {
+        display: flex;
+      }
+      .pulse {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #666;
+        animation: pulse 1.6s infinite ease-in-out;
+      }
+      @keyframes pulse {
+        0% { transform: scale(0.9); opacity: 0.5; }
+        50% { transform: scale(1.2); opacity: 1; }
+        100% { transform: scale(0.9); opacity: 0.5; }
+      }
     </style>
   </head>
   <body>
@@ -186,7 +210,11 @@
 
         <div class="card row">
           <label>Message</label>
-          <div id="toolArea" class="muted">No tool requests yet.</div>
+          <div id="waitPanel" class="wait-panel">
+            <span class="pulse"></span>
+            <span id="waitText">处理中…</span>
+            <span class="muted" id="waitTimer">00:00</span>
+          </div>
           <textarea id="messageInput"></textarea>
           <div class="btn-row">
             <button id="sendBtn">Send</button>
@@ -202,11 +230,14 @@
         : "http://127.0.0.1:7100";
 
       const chatArea = document.getElementById("chatArea");
-      const toolArea = document.getElementById("toolArea");
       const messageInput = document.getElementById("messageInput");
       const threadInfo = document.getElementById("threadInfo");
       const threadListEl = document.getElementById("threadList");
       const bridgeStatusEl = document.getElementById("bridgeStatus");
+      const waitPanel = document.getElementById("waitPanel");
+      const waitText = document.getElementById("waitText");
+      const waitTimer = document.getElementById("waitTimer");
+      let toolArea = null;
 
       const PAGE_SIZE = 10;
       let currentPage = 0;
@@ -216,6 +247,11 @@
       let lastAssistantText = "";
       let loadingEl = null;
       let suppressChoiceText = true;
+      let toolRequested = false;
+      let waitStartedAt = null;
+      let waitInterval = null;
+      let hintInterval = null;
+      let hintIndex = 0;
 
       function getThreadStore() {
         const raw = localStorage.getItem("codex.demo.threads");
@@ -384,6 +420,44 @@
         renderMessages();
       }
 
+      function startWaitPanel() {
+        waitStartedAt = Date.now();
+        hintIndex = 0;
+        const hints = [
+          "正在整理思路…",
+          "正在检索上下文…",
+          "正在生成回答…",
+          "正在检查输出格式…",
+        ];
+
+        waitPanel.classList.add("active");
+        waitText.textContent = hints[0];
+        waitTimer.textContent = "00:00";
+
+        clearInterval(waitInterval);
+        clearInterval(hintInterval);
+
+        waitInterval = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - waitStartedAt) / 1000);
+          const mins = String(Math.floor(elapsed / 60)).padStart(2, "0");
+          const secs = String(elapsed % 60).padStart(2, "0");
+          waitTimer.textContent = `${mins}:${secs}`;
+        }, 500);
+
+        hintInterval = setInterval(() => {
+          hintIndex = (hintIndex + 1) % hints.length;
+          waitText.textContent = hints[hintIndex];
+        }, 6000);
+      }
+
+      function stopWaitPanel() {
+        waitPanel.classList.remove("active");
+        clearInterval(waitInterval);
+        clearInterval(hintInterval);
+        waitInterval = null;
+        hintInterval = null;
+      }
+
       function detectQuickChoices(text) {
         const optionLine = /^\s*([A-Z])[\.\)、]\s+(.+)$/gm;
         const matches = Array.from(text.matchAll(optionLine)).map((match) => ({
@@ -482,9 +556,119 @@
       }
 
       function clearToolArea() {
-        toolArea.innerHTML = "<div class=\"muted\">No tool requests yet.</div>";
+        if (!toolArea) return;
+        toolArea.remove();
+        toolArea = null;
       }
 
+      function parseQuestionBlocks(text) {
+        const lines = text.split(/\r?\n/);
+        const blocks = [];
+        let current = null;
+        lines.forEach((line) => {
+          const qMatch = line.match(/^Question\s*\d+.*?:\s*(.+)$/i);
+          if (qMatch) {
+            if (current) blocks.push(current);
+            current = { title: line.trim(), question: qMatch[1].trim(), options: [] };
+            return;
+          }
+
+          const optMatch = line.match(/^\s*[-*]\s*([A-Za-z0-9]+)[:.\)]\s*(.+)$/);
+          if (optMatch && current) {
+            current.options.push({ label: optMatch[1], text: optMatch[2].trim() });
+            return;
+          }
+
+          const listMatch = line.match(/^\s*[-*]\s*(.+)$/);
+          if (listMatch && current) {
+            const raw = listMatch[1].trim();
+            if (raw.includes("/") || raw.includes(",")) {
+              raw.split(/[/,]/).map((item) => item.trim()).filter(Boolean).forEach((item) => {
+                current.options.push({ label: item, text: "" });
+              });
+            }
+          }
+        });
+        if (current) blocks.push(current);
+        return blocks.length > 0 ? blocks : null;
+      }
+
+      function isMultiFromText(text) {
+        return /multi|multiple|多选|多个正确/i.test(text);
+      }
+
+      function renderPseudoQuestions(blocks, fullText) {
+        toolArea = document.createElement("div");
+        toolArea.className = "msg assistant";
+        const wrap = document.createElement("div");
+        wrap.className = "quick-select";
+        wrap.innerHTML = "<strong>Quick Select</strong>";
+
+        const prompt = document.createElement("div");
+        prompt.className = "mono";
+        prompt.textContent = "Detected questions. Select options below.";
+        wrap.appendChild(prompt);
+
+        const answers = {};
+
+        blocks.forEach((block, idx) => {
+          const qWrap = document.createElement("div");
+          qWrap.className = "question";
+          const title = document.createElement("div");
+          title.textContent = block.title || `Question ${idx + 1}`;
+          qWrap.appendChild(title);
+
+          const opts = document.createElement("div");
+          opts.className = "options";
+          const allowMultiple = isMultiFromText(block.title + " " + block.question);
+
+          block.options.forEach((opt) => {
+            const label = document.createElement("label");
+            const input = document.createElement("input");
+            input.type = allowMultiple ? "checkbox" : "radio";
+            input.name = `q${idx}`;
+            input.value = opt.label;
+            input.addEventListener("change", () => {
+              const selected = Array.from(opts.querySelectorAll("input:checked"))
+                .map((el) => el.value);
+              answers[idx] = selected;
+            });
+            label.appendChild(input);
+            if (opt.text) {
+              label.appendChild(document.createTextNode(` ${opt.label}. ${opt.text}`));
+            } else {
+              label.appendChild(document.createTextNode(` ${opt.label}`));
+            }
+            opts.appendChild(label);
+          });
+
+          qWrap.appendChild(opts);
+          wrap.appendChild(qWrap);
+        });
+
+        const sendBtn = document.createElement("button");
+        sendBtn.textContent = "Send Selection";
+        sendBtn.addEventListener("click", async () => {
+          const parts = [];
+          blocks.forEach((_, idx) => {
+            const selected = answers[idx] || [];
+            if (selected.length > 0) parts.push(selected.join(","));
+          });
+          if (parts.length === 0) return;
+          messageInput.value = parts.join("\n");
+          await sendMessage();
+        });
+        wrap.appendChild(sendBtn);
+        toolArea.appendChild(wrap);
+        chatArea.appendChild(toolArea);
+        chatArea.scrollTop = chatArea.scrollHeight;
+
+        if (suppressChoiceText) {
+          const safe = (fullText || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          const collapsed = `Multiple-choice detected. <details><summary>Show original text</summary><pre>${safe}</pre></details>`;
+          updateAssistantMessage(activeAssistantIndex, collapsed, true);
+        }
+      }
       async function sendMessage() {
         if (!currentThreadId || isStreaming) return;
         const content = messageInput.value.trim();
@@ -497,6 +681,7 @@
         lastAssistantText = "";
         clearToolArea();
         showLoading(true);
+        startWaitPanel();
 
         const res = await fetch(`${BASE_URL}/api/turn/start`, {
           method: "POST",
@@ -542,6 +727,7 @@
             }
 
             if (event === "item/tool/requestUserInput") {
+              toolRequested = true;
               renderToolRequest(data.id, data.params?.questions || []);
             }
 
@@ -553,6 +739,15 @@
 
         isStreaming = false;
         showLoading(false);
+        stopWaitPanel();
+        if (!toolRequested) {
+          const blocks = parseQuestionBlocks(lastAssistantText || "");
+          if (blocks) {
+            renderPseudoQuestions(blocks, lastAssistantText || "");
+            return;
+          }
+        }
+
         const choices = detectQuickChoices(lastAssistantText || "");
         if (choices) {
           if (suppressChoiceText) {
@@ -566,7 +761,9 @@
       }
 
       function renderToolRequest(requestId, questions) {
-        toolArea.innerHTML = "";
+        clearToolArea();
+        toolArea = document.createElement("div");
+        toolArea.className = "msg assistant";
         const container = document.createElement("div");
         container.className = "row";
 
@@ -635,6 +832,8 @@
 
         container.appendChild(sendBtn);
         toolArea.appendChild(container);
+        chatArea.appendChild(toolArea);
+        chatArea.scrollTop = chatArea.scrollHeight;
       }
 
       document.getElementById("startBridgeBtn").addEventListener("click", startBridge);
