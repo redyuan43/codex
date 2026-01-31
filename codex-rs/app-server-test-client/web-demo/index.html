@@ -111,6 +111,26 @@
       .msg.assistant {
         background: #fff;
       }
+      .loading {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: #666;
+        font-size: 13px;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #999;
+        animation: bounce 1s infinite ease-in-out;
+      }
+      .dot:nth-child(2) { animation-delay: 0.15s; }
+      .dot:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes bounce {
+        0%, 80%, 100% { transform: scale(0.8); opacity: 0.4; }
+        40% { transform: scale(1.2); opacity: 1; }
+      }
       .mono {
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
@@ -124,6 +144,13 @@
         display: grid;
         gap: 4px;
         margin: 6px 0;
+      }
+      .quick-select {
+        border: 1px dashed #ccc;
+        border-radius: 8px;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
       }
     </style>
   </head>
@@ -159,16 +186,12 @@
 
         <div class="card row">
           <label>Message</label>
+          <div id="toolArea" class="muted">No tool requests yet.</div>
           <textarea id="messageInput"></textarea>
           <div class="btn-row">
             <button id="sendBtn">Send</button>
             <button id="clearBtn" class="secondary">Clear</button>
           </div>
-        </div>
-
-        <div class="card row">
-          <div><strong>Tool Input</strong></div>
-          <div id="toolArea" class="muted">No tool requests yet.</div>
         </div>
       </main>
     </div>
@@ -190,6 +213,9 @@
       let currentThreadId = null;
       let isStreaming = false;
       let activeAssistantIndex = null;
+      let lastAssistantText = "";
+      let loadingEl = null;
+      let suppressChoiceText = true;
 
       function getThreadStore() {
         const raw = localStorage.getItem("codex.demo.threads");
@@ -264,9 +290,16 @@
         messages.forEach((msg) => {
           const el = document.createElement("div");
           el.className = `msg ${msg.role}`;
-          el.textContent = msg.content;
+          if (msg.isHtml) {
+            el.innerHTML = msg.content;
+          } else {
+            el.textContent = msg.content;
+          }
           chatArea.appendChild(el);
         });
+        if (loadingEl) {
+          chatArea.appendChild(loadingEl);
+        }
         chatArea.scrollTop = chatArea.scrollHeight;
       }
 
@@ -323,19 +356,133 @@
 
       function appendMessage(role, content) {
         const messages = getMessages(currentThreadId);
-        messages.push({ role, content, ts: Date.now() });
+        messages.push({ role, content, ts: Date.now(), isHtml: false });
         setMessages(currentThreadId, messages);
         bumpThread(currentThreadId);
         renderMessages();
         return messages.length - 1;
       }
 
-      function updateAssistantMessage(index, content) {
+      function updateAssistantMessage(index, content, isHtml = false) {
         const messages = getMessages(currentThreadId);
         if (!messages[index]) return;
         messages[index].content = content;
+        messages[index].isHtml = isHtml;
         setMessages(currentThreadId, messages);
         renderMessages();
+      }
+
+      function showLoading(show) {
+        if (show) {
+          const el = document.createElement("div");
+          el.className = "loading";
+          el.innerHTML = "<span>Waiting</span><span class=\"dot\"></span><span class=\"dot\"></span><span class=\"dot\"></span>";
+          loadingEl = el;
+        } else {
+          loadingEl = null;
+        }
+        renderMessages();
+      }
+
+      function detectQuickChoices(text) {
+        const optionLine = /^\s*([A-Z])[\.\)、]\s+(.+)$/gm;
+        const matches = Array.from(text.matchAll(optionLine)).map((match) => ({
+          label: match[1],
+          text: match[2].trim(),
+        }));
+        if (matches.length > 0) return matches;
+
+        const slashPattern = text.match(/\b([A-Z])(?:\s*[/,]\s*[A-Z]){1,6}\b/);
+        if (slashPattern) {
+          return slashPattern[0].split(/\s*[/,]\s*/).filter(Boolean).map((c) => ({
+            label: c,
+            text: "",
+          }));
+        }
+        const numPattern = text.match(/\b(\d)(?:\s*[/,]\s*\d){1,6}\b/);
+        if (numPattern) {
+          return numPattern[0].split(/\s*[/,]\s*/).filter(Boolean).map((c) => ({
+            label: c,
+            text: "",
+          }));
+        }
+        return null;
+      }
+
+      function isMultiSelect(text) {
+        if (/多选|多个正确|可多选/.test(text)) return true;
+        if (/单选|只能选|仅选/.test(text)) return false;
+        return true;
+      }
+
+      function renderQuickSelect(choices, promptText) {
+        if (!choices || choices.length === 0) return;
+        toolArea.innerHTML = "";
+        const wrap = document.createElement("div");
+        wrap.className = "quick-select";
+        wrap.innerHTML = "<strong>Quick Select</strong>";
+
+        const prompt = document.createElement("div");
+        prompt.className = "mono";
+        prompt.textContent = promptText.trim();
+        wrap.appendChild(prompt);
+
+        const opts = document.createElement("div");
+        opts.className = "options";
+        const selected = new Set();
+        const allowMultiple = isMultiSelect(promptText);
+
+        choices.forEach((choice) => {
+          const label = document.createElement("label");
+          const input = document.createElement("input");
+          input.type = allowMultiple ? "checkbox" : "radio";
+          input.name = "quick-select";
+          input.value = choice.label;
+          input.addEventListener("change", () => {
+            if (allowMultiple) {
+              if (input.checked) selected.add(choice.label);
+              else selected.delete(choice.label);
+            } else {
+              selected.clear();
+              if (input.checked) selected.add(choice.label);
+            }
+          });
+          label.appendChild(input);
+          if (choice.text) {
+            label.appendChild(document.createTextNode(` ${choice.label}. ${choice.text}`));
+          } else {
+            label.appendChild(document.createTextNode(` ${choice.label}`));
+          }
+          opts.appendChild(label);
+        });
+        wrap.appendChild(opts);
+
+        const allowOther = /其他|Other/i.test(promptText);
+        let otherInput = null;
+        if (allowOther) {
+          otherInput = document.createElement("input");
+          otherInput.type = "text";
+          otherInput.placeholder = "Other (optional)";
+          wrap.appendChild(otherInput);
+        }
+
+        const sendBtn = document.createElement("button");
+        sendBtn.textContent = "Send Selection";
+        sendBtn.addEventListener("click", async () => {
+          const otherValue = otherInput ? otherInput.value.trim() : "";
+          if (selected.size === 0 && !otherValue) return;
+          const values = Array.from(selected);
+          if (otherValue) values.push(otherValue);
+          messageInput.value = values.join(", ");
+          await sendMessage();
+        });
+        wrap.appendChild(sendBtn);
+
+        toolArea.appendChild(wrap);
+      }
+
+      function clearToolArea() {
+        toolArea.innerHTML = "<div class=\"muted\">No tool requests yet.</div>";
       }
 
       async function sendMessage() {
@@ -347,6 +494,9 @@
         appendMessage("user", content);
         activeAssistantIndex = appendMessage("assistant", "");
         isStreaming = true;
+        lastAssistantText = "";
+        clearToolArea();
+        showLoading(true);
 
         const res = await fetch(`${BASE_URL}/api/turn/start`, {
           method: "POST",
@@ -363,6 +513,7 @@
         const decoder = new TextDecoder();
         let buffer = "";
         let assistantText = "";
+        let cachedFinal = "";
 
         while (true) {
           const { value, done } = await reader.read();
@@ -385,6 +536,8 @@
             if (event === "item/agentMessage/delta") {
               const delta = data.params?.delta ?? "";
               assistantText += delta;
+              lastAssistantText = assistantText;
+              cachedFinal = assistantText;
               updateAssistantMessage(activeAssistantIndex, assistantText);
             }
 
@@ -399,6 +552,17 @@
         }
 
         isStreaming = false;
+        showLoading(false);
+        const choices = detectQuickChoices(lastAssistantText || "");
+        if (choices) {
+          if (suppressChoiceText) {
+            const original = lastAssistantText || "";
+            const safe = original.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const collapsed = `Multiple-choice detected. <details><summary>Show original text</summary><pre>${safe}</pre></details>`;
+            updateAssistantMessage(activeAssistantIndex, collapsed, true);
+          }
+          renderQuickSelect(choices, lastAssistantText || "");
+        }
       }
 
       function renderToolRequest(requestId, questions) {
@@ -441,12 +605,26 @@
           });
 
           qWrap.appendChild(opts);
+          const otherInput = document.createElement("input");
+          otherInput.type = "text";
+          otherInput.placeholder = "Other (optional)";
+          otherInput.addEventListener("input", () => {
+            const selected = Array.from(opts.querySelectorAll("input:checked"))
+              .map((el) => el.value);
+            const otherValue = otherInput.value.trim();
+            const merged = otherValue ? [...selected, otherValue] : selected;
+            answers[q.id] = merged;
+          });
+          qWrap.appendChild(otherInput);
           container.appendChild(qWrap);
         });
 
         const sendBtn = document.createElement("button");
         sendBtn.textContent = "Submit Answers";
         sendBtn.addEventListener("click", async () => {
+          questions.forEach((q) => {
+            if (!answers[q.id]) answers[q.id] = [];
+          });
           await fetch(`${BASE_URL}/api/tool/answer`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
