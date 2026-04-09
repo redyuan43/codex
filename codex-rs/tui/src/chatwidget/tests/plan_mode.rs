@@ -1,11 +1,13 @@
 use super::*;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string());
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string(), false);
     let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
 
@@ -17,7 +19,7 @@ async fn plan_implementation_popup_snapshot() {
 async fn plan_implementation_popup_no_selected_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string());
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string(), false);
     let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -49,7 +51,7 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
 async fn plan_implementation_popup_clear_context_emits_compact_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string());
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string(), false);
     let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -68,15 +70,62 @@ async fn plan_implementation_popup_clear_context_emits_compact_event() {
 }
 
 #[tokio::test]
-async fn plan_implementation_popup_clear_context_option_is_disabled_without_plan_text() {
+async fn plan_implementation_popup_fresh_session_emits_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string(), false);
+    let _ = drain_insert_history(&mut rx);
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::ImplementPlanInFreshSession {
+        plan_path,
+        collaboration_mode,
+    } = event
+    else {
+        panic!("expected ImplementPlanInFreshSession, got {event:?}");
+    };
+    assert!(plan_path.ends_with(".codex/PLAN.md"));
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_fresh_session_option_is_disabled_without_plan_file() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.latest_completed_plan_text = Some("## Plan\n\n1. Do the work".to_string());
     chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
-    assert!(popup.contains(PLAN_IMPLEMENTATION_CLEAR_CONTEXT_YES));
-    assert!(popup.contains("Latest plan unavailable"));
+    assert!(popup.contains(PLAN_IMPLEMENTATION_FRESH_SESSION_YES));
+    assert!(popup.contains("PLAN.md unavailable"));
+}
+
+#[tokio::test]
+async fn plan_item_completed_persists_plan_file() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let temp = tempdir().expect("tempdir");
+    let cwd = temp.path().to_path_buf();
+    let plan_path = cwd.join(".codex").join("PLAN.md");
+    chat.config.cwd = AbsolutePathBuf::from_absolute_path(&cwd).expect("absolute cwd");
+    chat.current_cwd = Some(cwd);
+
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string(), false);
+
+    assert_eq!(
+        std::fs::read_to_string(&plan_path).expect("read PLAN.md"),
+        "## Plan\n\n1. Do the work"
+    );
+    assert_eq!(
+        chat.persisted_plan_path.as_deref(),
+        Some(plan_path.as_path())
+    );
+    assert_eq!(chat.persisted_plan_error, None);
 }
 
 #[tokio::test]
@@ -630,7 +679,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
 
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), false);
 
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
@@ -737,7 +786,7 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
 
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
-    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string(), false);
     chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -762,6 +811,7 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
 - Step 2
 "
         .to_string(),
+        false,
     );
     chat.bottom_pane
         .set_composer_text("Please continue.".to_string(), Vec::new(), Vec::new());
@@ -802,6 +852,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
         "- Initial plan
 "
         .to_string(),
+        false,
     );
     chat.bottom_pane
         .set_composer_text("Please revise.".to_string(), Vec::new(), Vec::new());
@@ -823,6 +874,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
         "- Revised plan
 "
         .to_string(),
+        false,
     );
     chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
 
@@ -882,7 +934,7 @@ async fn plan_completion_restores_status_indicator_after_streaming_plan_output()
     assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
 
-    chat.on_plan_item_completed("- Step 1\n".to_string());
+    chat.on_plan_item_completed("- Step 1\n".to_string(), false);
 
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
     assert_eq!(chat.bottom_pane.is_task_running(), true);
@@ -1327,6 +1379,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
+        initial_collaboration_mask: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
         model_catalog: test_model_catalog(&cfg),

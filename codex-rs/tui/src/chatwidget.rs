@@ -244,8 +244,11 @@ const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_YES: &str = "Yes, clear context and implement";
+const PLAN_IMPLEMENTATION_FRESH_SESSION_YES: &str = "Yes, clear context in new session";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const PLAN_FILE_DIR_NAME: &str = ".codex";
+const PLAN_FILE_NAME: &str = "PLAN.md";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
@@ -552,6 +555,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_user_message: Option<UserMessage>,
+    pub(crate) initial_collaboration_mask: Option<CollaborationModeMask>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) has_chatgpt_account: bool,
     pub(crate) model_catalog: Arc<ModelCatalog>,
@@ -930,6 +934,10 @@ pub(crate) struct ChatWidget {
     current_rollout_path: Option<PathBuf>,
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
+    // Persisted plan file path for the current turn.
+    persisted_plan_path: Option<PathBuf>,
+    // Plan persistence error recorded for the current turn.
+    persisted_plan_error: Option<String>,
     // Runtime network proxy bind addresses from SessionConfigured.
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
@@ -1049,6 +1057,8 @@ pub(crate) struct ThreadInputState {
     queued_user_messages: VecDeque<UserMessage>,
     latest_completed_plan_text: Option<String>,
     pending_post_compact_implementation: Option<CollaborationModeMask>,
+    persisted_plan_path: Option<PathBuf>,
+    persisted_plan_error: Option<String>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -2203,17 +2213,21 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_plan_item_completed(&mut self, text: String) {
+    fn on_plan_item_completed(&mut self, text: String, from_replay: bool) {
         let streamed_plan = self.plan_delta_buffer.trim().to_string();
         let plan_text = if text.trim().is_empty() {
             streamed_plan
         } else {
             text
         };
-        if !plan_text.trim().is_empty() {
+        let has_plan_text = !plan_text.trim().is_empty();
+        if has_plan_text {
             self.latest_completed_plan_text = Some(plan_text.clone());
+            if !from_replay {
+                self.persist_plan_to_file(&plan_text);
+            }
         }
-        if !plan_text.trim().is_empty() {
+        if has_plan_text {
             self.last_copyable_output = Some(plan_text.clone());
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
@@ -2221,7 +2235,7 @@ impl ChatWidget {
         let should_restore_after_stream = self.plan_stream_controller.is_some();
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
-        self.saw_plan_item_this_turn = true;
+        self.saw_plan_item_this_turn = has_plan_text;
         let finalized_streamed_cell =
             if let Some(mut controller) = self.plan_stream_controller.take() {
                 controller.finalize()
@@ -2297,6 +2311,8 @@ impl ChatWidget {
         self.last_plan_progress = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
+        self.persisted_plan_path = None;
+        self.persisted_plan_error = None;
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
         self.pending_turn_copyable_output = None;
@@ -2421,6 +2437,41 @@ impl ChatWidget {
         self.open_plan_implementation_prompt();
     }
 
+    fn persist_plan_to_file(&mut self, plan_text: &str) {
+        let cwd = self
+            .current_cwd
+            .as_deref()
+            .unwrap_or(self.config.cwd.as_path());
+        let project_root = self
+            .status_line_project_root_for_cwd(cwd)
+            .unwrap_or_else(|| cwd.to_path_buf());
+        let plan_dir = project_root.join(PLAN_FILE_DIR_NAME);
+        let plan_path = plan_dir.join(PLAN_FILE_NAME);
+
+        if let Err(err) = std::fs::create_dir_all(&plan_dir) {
+            warn!(
+                path = %plan_dir.display(),
+                error = %err,
+                "failed to create plan directory"
+            );
+            self.persisted_plan_path = None;
+            self.persisted_plan_error = Some(err.to_string());
+            return;
+        }
+
+        match std::fs::write(&plan_path, plan_text) {
+            Ok(()) => {
+                self.persisted_plan_path = Some(plan_path);
+                self.persisted_plan_error = None;
+            }
+            Err(err) => {
+                warn!(path = %plan_path.display(), error = %err, "failed to persist plan");
+                self.persisted_plan_path = None;
+                self.persisted_plan_error = Some(err.to_string());
+            }
+        }
+    }
+
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
         let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
@@ -2438,7 +2489,7 @@ impl ChatWidget {
         };
         let (compact_then_implement_actions, compact_then_implement_disabled_reason) = match (
             self.thread_id,
-            default_mask,
+            default_mask.clone(),
             self.latest_completed_plan_text.clone(),
         ) {
             (Some(_), Some(mask), Some(plan_text)) => {
@@ -2454,6 +2505,27 @@ impl ChatWidget {
             (_, None, _) => (Vec::new(), Some("Default mode unavailable".to_string())),
             (_, _, None) => (Vec::new(), Some("Latest plan unavailable".to_string())),
         };
+        let (fresh_session_actions, fresh_session_disabled_reason) =
+            match (default_mask, self.persisted_plan_path.clone()) {
+                (Some(mask), Some(plan_path)) => {
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::ImplementPlanInFreshSession {
+                            plan_path: plan_path.clone(),
+                            collaboration_mode: mask.clone(),
+                        });
+                    })];
+                    (actions, None)
+                }
+                (None, _) => (Vec::new(), Some("Default mode unavailable".to_string())),
+                (_, None) => (
+                    Vec::new(),
+                    Some(
+                        self.persisted_plan_error
+                            .clone()
+                            .unwrap_or_else(|| "PLAN.md unavailable".to_string()),
+                    ),
+                ),
+            };
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
@@ -2472,6 +2544,16 @@ impl ChatWidget {
                 is_current: false,
                 actions: compact_then_implement_actions,
                 disabled_reason: compact_then_implement_disabled_reason,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_FRESH_SESSION_YES.to_string(),
+                description: Some("Start a fresh session and implement from PLAN.md.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: fresh_session_actions,
+                disabled_reason: fresh_session_disabled_reason,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -3200,6 +3282,8 @@ impl ChatWidget {
             queued_user_messages: self.queued_user_messages.clone(),
             latest_completed_plan_text: self.latest_completed_plan_text.clone(),
             pending_post_compact_implementation: self.pending_post_compact_implementation.clone(),
+            persisted_plan_path: self.persisted_plan_path.clone(),
+            persisted_plan_error: self.persisted_plan_error.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3257,6 +3341,8 @@ impl ChatWidget {
             self.latest_completed_plan_text = input_state.latest_completed_plan_text;
             self.pending_post_compact_implementation =
                 input_state.pending_post_compact_implementation;
+            self.persisted_plan_path = input_state.persisted_plan_path;
+            self.persisted_plan_error = input_state.persisted_plan_error;
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -3272,6 +3358,8 @@ impl ChatWidget {
             self.queued_user_messages.clear();
             self.latest_completed_plan_text = None;
             self.pending_post_compact_implementation = None;
+            self.persisted_plan_path = None;
+            self.persisted_plan_error = None;
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -4628,6 +4716,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            initial_collaboration_mask,
             enhanced_keys_supported,
             has_chatgpt_account,
             model_catalog,
@@ -4652,8 +4741,9 @@ impl ChatWidget {
         let model_for_header = model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, model_catalog.as_ref(), model_override);
+        let active_collaboration_mask = initial_collaboration_mask.or_else(|| {
+            Self::initial_collaboration_mask(&config, model_catalog.as_ref(), model_override)
+        });
         let header_model = active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
@@ -4778,6 +4868,8 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             current_cwd,
+            persisted_plan_path: None,
+            persisted_plan_error: None,
             session_network_proxy: None,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
@@ -6084,7 +6176,7 @@ impl ChatWidget {
                     }),
                 });
             }
-            ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
+            ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text, from_replay),
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
@@ -7177,7 +7269,7 @@ impl ChatWidget {
                     }
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
-                    self.on_plan_item_completed(plan_item.text.clone());
+                    self.on_plan_item_completed(plan_item.text.clone(), from_replay);
                 }
                 if matches!(item, codex_protocol::items::TurnItem::ContextCompaction(_)) {
                     self.completed_context_compaction_this_turn = true;

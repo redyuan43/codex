@@ -124,6 +124,7 @@ async fn helpers_are_available_and_do_not_panic() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_user_message: None,
+        initial_collaboration_mask: None,
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
         model_catalog: test_model_catalog(&cfg),

@@ -1,13 +1,15 @@
 ---
 source: tui/src/chatwidget/tests/plan_mode.rs
-assertion_line: 26
+assertion_line: 28
 expression: popup
 ---
   Implement this plan?
 
-  1. Yes, implement this plan          Switch to Default and start coding.
-› 2. Yes, clear context and implement  Keep only the latest plan, then switch
-                                       to Default.
-  3. No, stay in Plan mode             Continue planning with the model.
+  1. Yes, implement this plan           Switch to Default and start coding.
+› 2. Yes, clear context and implement   Keep only the latest plan, then switch
+                                        to Default.
+  3. Yes, clear context in new session  Start a fresh session and implement
+                                        from PLAN.md.
+  4. No, stay in Plan mode              Continue planning with the model.
 
   Press enter to confirm or esc to go back

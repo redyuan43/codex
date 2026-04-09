@@ -1082,13 +1082,15 @@ impl App {
         &self,
         tui: &mut tui::Tui,
         cfg: codex_core::config::Config,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        initial_collaboration_mask: Option<codex_protocol::config_types::CollaborationModeMask>,
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
-            // Fork/resume bootstraps here don't carry any prefilled message content.
-            initial_user_message: None,
+            initial_user_message,
+            initial_collaboration_mask,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
             model_catalog: self.model_catalog.clone(),
@@ -3240,7 +3242,8 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
 
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        let init =
+            self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone(), None, None);
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
         self.reset_for_thread_switch(tui)?;
@@ -3300,13 +3303,23 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
+        initial_prompt: Option<String>,
+        initial_collaboration_mask: Option<codex_protocol::config_types::CollaborationModeMask>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
         self.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
             .await;
         let model = self.chat_widget.current_model().to_string();
-        let config = self.fresh_session_config();
+        let mut config = self.fresh_session_config();
+        if let Some(mask) = initial_collaboration_mask.as_ref() {
+            if let Some(mask_model) = mask.model.as_ref() {
+                config.model = Some(mask_model.clone());
+            }
+            if let Some(reasoning_effort) = mask.reasoning_effort {
+                config.model_reasoning_effort = reasoning_effort;
+            }
+        }
         let summary = session_summary(
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),
@@ -3324,7 +3337,17 @@ impl App {
         match app_server.start_thread(&config).await {
             Ok(started) => {
                 if let Err(err) = self
-                    .replace_chat_widget_with_app_server_thread(tui, app_server, started)
+                    .replace_chat_widget_with_app_server_thread(
+                        tui,
+                        app_server,
+                        started,
+                        crate::chatwidget::create_initial_user_message(
+                            initial_prompt,
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        initial_collaboration_mask,
+                    )
                     .await
                 {
                     self.chat_widget.add_error_message(format!(
@@ -3357,9 +3380,16 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         started: AppServerStartedThread,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        initial_collaboration_mask: Option<codex_protocol::config_types::CollaborationModeMask>,
     ) -> Result<()> {
         self.reset_thread_event_state();
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(
+            tui,
+            self.config.clone(),
+            initial_user_message,
+            initial_collaboration_mask,
+        );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
@@ -3691,6 +3721,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    initial_collaboration_mask: None,
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
@@ -3725,6 +3756,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    initial_collaboration_mask: None,
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
@@ -3764,6 +3796,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    initial_collaboration_mask: None,
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
@@ -4055,15 +4088,33 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                self.start_fresh_session_with_summary_hint(tui, app_server)
+                self.start_fresh_session_with_summary_hint(tui, app_server, None, None)
                     .await;
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
-                self.start_fresh_session_with_summary_hint(tui, app_server)
+                self.start_fresh_session_with_summary_hint(tui, app_server, None, None)
                     .await;
+            }
+            AppEvent::ImplementPlanInFreshSession {
+                plan_path,
+                collaboration_mode,
+            } => {
+                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+                self.reset_app_ui_state_after_clear();
+                let plan_path = plan_path.display();
+                let prompt = format!(
+                    "Read the plan from {plan_path} and implement it. This is a fresh session, so use that file as the source of truth."
+                );
+                self.start_fresh_session_with_summary_hint(
+                    tui,
+                    app_server,
+                    Some(prompt),
+                    Some(collaboration_mode),
+                )
+                .await;
             }
             AppEvent::OpenResumePicker => {
                 let picker_app_server = match crate::start_app_server_for_picker(
@@ -4156,7 +4207,7 @@ impl App {
                                     .update_search_dir(self.config.cwd.to_path_buf());
                                 match self
                                     .replace_chat_widget_with_app_server_thread(
-                                        tui, app_server, resumed,
+                                        tui, app_server, resumed, None, None,
                                     )
                                     .await
                                 {
@@ -4219,7 +4270,9 @@ impl App {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self
-                                .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
+                                .replace_chat_widget_with_app_server_thread(
+                                    tui, app_server, forked, None, None,
+                                )
                                 .await
                             {
                                 Ok(()) => {
@@ -6698,6 +6751,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ),
+            initial_collaboration_mask: None,
             enhanced_keys_supported: false,
             has_chatgpt_account: false,
             model_catalog: app.model_catalog.clone(),
@@ -10662,6 +10716,7 @@ guardian_approval = true
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             app_event_tx: app.app_event_tx.clone(),
             initial_user_message: None,
+            initial_collaboration_mask: None,
             enhanced_keys_supported: app.enhanced_keys_supported,
             has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
             model_catalog: app.model_catalog.clone(),

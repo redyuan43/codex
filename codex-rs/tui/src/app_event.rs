@@ -538,6 +538,12 @@ pub(crate) enum AppEvent {
         collaboration_mode: CollaborationModeMask,
     },
 
+    /// Clear the UI, start a fresh session, and implement from a persisted plan file.
+    ImplementPlanInFreshSession {
+        plan_path: PathBuf,
+        collaboration_mode: CollaborationModeMask,
+    },
+
     /// Compact the active thread to the latest completed plan, then auto-execute it.
     StartPlanOnlyCompactAndImplement {
         plan_text: String,

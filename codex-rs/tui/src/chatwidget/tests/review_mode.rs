@@ -363,6 +363,8 @@ async fn restore_thread_input_state_restores_pending_steers_without_downgrading_
         queued_user_messages,
         latest_completed_plan_text: None,
         pending_post_compact_implementation: None,
+        persisted_plan_path: None,
+        persisted_plan_error: None,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: false,
