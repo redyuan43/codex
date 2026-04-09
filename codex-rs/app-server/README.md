@@ -145,7 +145,7 @@ Example with notification opt-out:
 - `thread/unsubscribe` — unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server shuts down and unloads the thread, then emits `thread/closed`.
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
-- `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications. Optional `strategy` can request specialized compaction flows such as keeping only the latest plan text before implementation handoff.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
@@ -419,6 +419,8 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 
 Use `thread/compact/start` to trigger manual history compaction for a thread. The request returns immediately with `{}`.
 
+Pass `strategy: { "type": "planOnlyHandoff", "planText": "..." }` when you want the thread to discard other model-visible history, keep only the latest completed plan as the summary payload, and then continue from that compacted context.
+
 Progress is emitted as standard `turn/*` and `item/*` notifications on the same `threadId`. Clients should expect a single compaction item:
 
 - `item/started` with `item: { "type": "contextCompaction", ... }`
@@ -428,6 +430,14 @@ While compaction is running, the thread is effectively in a turn so clients shou
 
 ```json
 { "method": "thread/compact/start", "id": 25, "params": { "threadId": "thr_b" } }
+
+{ "method": "thread/compact/start", "id": 26, "params": {
+    "threadId": "thr_b",
+    "strategy": {
+      "type": "planOnlyHandoff",
+      "planText": "## Plan\n\n1. Ship the fix\n2. Add regression coverage"
+    }
+} }
 { "id": 25, "result": {} }
 ```
 

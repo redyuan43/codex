@@ -88,6 +88,44 @@ pub(crate) async fn run_compact_task(
     .await
 }
 
+pub(crate) async fn run_plan_only_handoff_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    plan_text: String,
+) -> CodexResult<()> {
+    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
+        turn_id: turn_context.sub_id.clone(),
+        started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
+        model_context_window: turn_context.model_context_window(),
+        collaboration_mode_kind: turn_context.collaboration_mode.mode,
+    });
+    sess.send_event(&turn_context, start_event).await;
+
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
+    sess.emit_turn_item_started(&turn_context, &compaction_item)
+        .await;
+
+    let summary_text = format!("{SUMMARY_PREFIX}\n{plan_text}");
+    let history_items = sess.clone_history().await.raw_items().to_vec();
+    let mut new_history = build_compacted_history(Vec::new(), &[], &summary_text);
+    let ghost_snapshots: Vec<ResponseItem> = history_items
+        .iter()
+        .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+        .cloned()
+        .collect();
+    new_history.extend(ghost_snapshots);
+
+    finish_compaction_replacement(
+        &sess,
+        turn_context,
+        compaction_item,
+        summary_text,
+        new_history,
+        /*reference_context_item*/ None,
+    )
+    .await
+}
+
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -215,21 +253,16 @@ async fn run_compact_task_inner(
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
     };
-    let compacted_item = CompactedItem {
-        message: summary_text.clone(),
-        replacement_history: Some(new_history.clone()),
-    };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    finish_compaction_replacement(
+        &sess,
+        turn_context.clone(),
+        compaction_item,
+        summary_text,
+        new_history,
+        reference_context_item,
+    )
+    .await?;
     client_session.reset_websocket_session();
-    sess.recompute_token_usage(&turn_context).await;
-
-    sess.emit_turn_item_completed(&turn_context, compaction_item)
-        .await;
-    let warning = EventMsg::Warning(WarningEvent {
-        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
-    });
-    sess.send_event(&turn_context, warning).await;
     Ok(())
 }
 
@@ -389,6 +422,31 @@ fn build_compacted_history_with_limit(
     });
 
     history
+}
+
+async fn finish_compaction_replacement(
+    sess: &Session,
+    turn_context: Arc<TurnContext>,
+    compaction_item: TurnItem,
+    summary_text: String,
+    new_history: Vec<ResponseItem>,
+    reference_context_item: Option<codex_protocol::protocol::TurnContextItem>,
+) -> CodexResult<()> {
+    let compacted_item = CompactedItem {
+        message: summary_text,
+        replacement_history: Some(new_history.clone()),
+    };
+    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
+        .await;
+    sess.recompute_token_usage(&turn_context).await;
+
+    sess.emit_turn_item_completed(&turn_context, compaction_item)
+        .await;
+    let warning = EventMsg::Warning(WarningEvent {
+        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
+    });
+    sess.send_event(&turn_context, warning).await;
+    Ok(())
 }
 
 async fn drain_to_completed(

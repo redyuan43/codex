@@ -609,6 +609,9 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
+    /// Replace model-visible history with the latest completed plan and compact the thread.
+    CompactPlanOnlyHandoff { plan_text: String },
+
     /// Drop all persisted memory artifacts and memory-tracking DB rows.
     DropMemories,
 
@@ -735,6 +738,7 @@ impl Op {
             Self::ReloadUserConfig => "reload_user_config",
             Self::ListSkills { .. } => "list_skills",
             Self::Compact => "compact",
+            Self::CompactPlanOnlyHandoff { .. } => "compact_plan_only_handoff",
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
             Self::SetThreadName { .. } => "set_thread_name",

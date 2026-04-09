@@ -1815,6 +1815,61 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
 }
 
 #[tokio::test]
+async fn compact_plan_only_handoff_replaces_history_with_plan_summary_and_preserves_ghost_snapshots()
+ {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let ghost_snapshot = ResponseItem::GhostSnapshot {
+        ghost_commit: codex_git_utils::GhostCommit::new(
+            "ghost-1".to_string(),
+            /*parent*/ None,
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+    sess.replace_history(
+        vec![
+            user_message("old user message"),
+            assistant_message("old assistant message"),
+            ghost_snapshot.clone(),
+        ],
+        Some(tc.to_turn_context_item()),
+    )
+    .await;
+
+    handlers::compact_plan_only_handoff(
+        &sess,
+        "sub-1".to_string(),
+        "## Plan\n\n1. Keep this\n2. Implement it".to_string(),
+    )
+    .await;
+
+    loop {
+        let event = rx.recv().await.expect("event");
+        if matches!(event.msg, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+
+    let expected_summary = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "{}\n## Plan\n\n1. Keep this\n2. Implement it",
+                crate::compact::SUMMARY_PREFIX
+            ),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    assert_eq!(
+        sess.clone_history().await.raw_items(),
+        &[expected_summary, ghost_snapshot]
+    );
+    assert!(sess.reference_context_item().await.is_none());
+}
+
+#[tokio::test]
 async fn thread_rollback_persists_marker_and_replays_cumulatively() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let rollout_path = attach_rollout_recorder(&sess).await;

@@ -243,6 +243,7 @@ use tracing::warn;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
+const PLAN_IMPLEMENTATION_CLEAR_CONTEXT_YES: &str = "Yes, clear context and implement";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
@@ -903,6 +904,12 @@ pub(crate) struct ChatWidget {
     // later steer. This is cleared when the user submits a steer so the plan popup only appears
     // if a newer proposed plan arrives afterward.
     saw_plan_item_this_turn: bool,
+    // The latest completed `<proposed_plan>` body observed for this thread.
+    latest_completed_plan_text: Option<String>,
+    // One-shot action to run after a successful plan-only context compaction turn finishes.
+    pending_post_compact_implementation: Option<CollaborationModeMask>,
+    // Whether the current turn completed a context compaction item successfully.
+    completed_context_compaction_this_turn: bool,
     // Latest `update_plan` checklist task counts for terminal-title rendering.
     last_plan_progress: Option<(usize, usize)>,
     // Incremental buffer for streamed plan content.
@@ -1040,6 +1047,8 @@ pub(crate) struct ThreadInputState {
     pending_steers: VecDeque<UserMessage>,
     rejected_steers_queue: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
+    latest_completed_plan_text: Option<String>,
+    pending_post_compact_implementation: Option<CollaborationModeMask>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
@@ -2202,6 +2211,9 @@ impl ChatWidget {
             text
         };
         if !plan_text.trim().is_empty() {
+            self.latest_completed_plan_text = Some(plan_text.clone());
+        }
+        if !plan_text.trim().is_empty() {
             self.last_copyable_output = Some(plan_text.clone());
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
@@ -2281,6 +2293,7 @@ impl ChatWidget {
             .set_turn_running(/*turn_running*/ true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
+        self.completed_context_compaction_this_turn = false;
         self.last_plan_progress = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
@@ -2359,7 +2372,11 @@ impl ChatWidget {
         let had_pending_steers = !self.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
-        if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
+        if !from_replay
+            && !self.try_auto_submit_post_compact_implementation(had_pending_steers)
+            && !self.has_queued_follow_up_messages()
+            && !had_pending_steers
+        {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -2406,7 +2423,7 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.model_catalog.as_ref());
-        let (implement_actions, implement_disabled_reason) = match default_mask {
+        let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -2419,6 +2436,24 @@ impl ChatWidget {
             }
             None => (Vec::new(), Some("Default mode unavailable".to_string())),
         };
+        let (compact_then_implement_actions, compact_then_implement_disabled_reason) = match (
+            self.thread_id,
+            default_mask,
+            self.latest_completed_plan_text.clone(),
+        ) {
+            (Some(_), Some(mask), Some(plan_text)) => {
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::StartPlanOnlyCompactAndImplement {
+                        plan_text: plan_text.clone(),
+                        collaboration_mode: mask.clone(),
+                    });
+                })];
+                (actions, None)
+            }
+            (None, _, _) => (Vec::new(), Some("Thread unavailable".to_string())),
+            (_, None, _) => (Vec::new(), Some("Default mode unavailable".to_string())),
+            (_, _, None) => (Vec::new(), Some("Latest plan unavailable".to_string())),
+        };
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
@@ -2427,6 +2462,16 @@ impl ChatWidget {
                 is_current: false,
                 actions: implement_actions,
                 disabled_reason: implement_disabled_reason,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_CLEAR_CONTEXT_YES.to_string(),
+                description: Some("Keep only the latest plan, then switch to Default.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: compact_then_implement_actions,
+                disabled_reason: compact_then_implement_disabled_reason,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -2455,6 +2500,24 @@ impl ChatWidget {
 
     fn has_queued_follow_up_messages(&self) -> bool {
         !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
+    }
+
+    fn try_auto_submit_post_compact_implementation(&mut self, had_pending_steers: bool) -> bool {
+        if had_pending_steers || self.has_queued_follow_up_messages() {
+            return false;
+        }
+        if !self.completed_context_compaction_this_turn {
+            self.pending_post_compact_implementation = None;
+            return false;
+        }
+        let Some(collaboration_mode) = self.pending_post_compact_implementation.take() else {
+            return false;
+        };
+        self.submit_user_message_with_mode(
+            PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string(),
+            collaboration_mode,
+        );
+        true
     }
 
     fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
@@ -3135,6 +3198,8 @@ impl ChatWidget {
                 .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
+            latest_completed_plan_text: self.latest_completed_plan_text.clone(),
+            pending_post_compact_implementation: self.pending_post_compact_implementation.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3189,6 +3254,9 @@ impl ChatWidget {
                 .collect();
             self.rejected_steers_queue = input_state.rejected_steers_queue;
             self.queued_user_messages = input_state.queued_user_messages;
+            self.latest_completed_plan_text = input_state.latest_completed_plan_text;
+            self.pending_post_compact_implementation =
+                input_state.pending_post_compact_implementation;
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -3202,6 +3270,8 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.latest_completed_plan_text = None;
+            self.pending_post_compact_implementation = None;
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -4696,6 +4766,9 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            latest_completed_plan_text: None,
+            pending_post_compact_implementation: None,
+            completed_context_compaction_this_turn: false,
             last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
@@ -6203,6 +6276,7 @@ impl ChatWidget {
                 self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
+                self.completed_context_compaction_this_turn = true;
                 self.on_agent_message("Context compacted".to_owned());
             }
             ThreadItem::HookPrompt { .. } => {}
@@ -6585,9 +6659,11 @@ impl ChatWidget {
             }
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;
+                self.pending_post_compact_implementation = None;
                 self.on_interrupted_turn(TurnAbortReason::Interrupted);
             }
             TurnStatus::Failed => {
+                self.pending_post_compact_implementation = None;
                 if let Some(error) = notification.turn.error {
                     if self.last_non_retry_error.as_ref()
                         == Some(&(notification.turn.id.clone(), error.message.clone()))
@@ -6912,6 +6988,7 @@ impl ChatWidget {
                 }
                 TurnAbortReason::Replaced => {
                     self.submit_pending_steers_after_interrupt = false;
+                    self.pending_post_compact_implementation = None;
                     self.pending_steers.clear();
                     self.refresh_pending_input_preview();
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
@@ -6985,7 +7062,10 @@ impl ChatWidget {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => {
+                self.completed_context_compaction_this_turn = true;
+                self.on_agent_message("Context compacted".to_owned());
+            }
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -7098,6 +7178,9 @@ impl ChatWidget {
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
+                }
+                if matches!(item, codex_protocol::items::TurnItem::ContextCompaction(_)) {
+                    self.completed_context_compaction_this_turn = true;
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
                     self.on_agent_message_item_completed(item);
@@ -10394,6 +10477,17 @@ impl ChatWidget {
         } else {
             self.submit_user_message(user_message);
         }
+    }
+
+    pub(crate) fn set_pending_post_compact_implementation(
+        &mut self,
+        collaboration_mode: CollaborationModeMask,
+    ) {
+        self.pending_post_compact_implementation = Some(collaboration_mode);
+    }
+
+    pub(crate) fn clear_pending_post_compact_implementation(&mut self) {
+        self.pending_post_compact_implementation = None;
     }
 
     /// True when the UI is in the regular composer state with no running task,

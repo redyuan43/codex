@@ -10,6 +10,11 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CompactTask;
 
+#[derive(Clone)]
+pub(crate) struct PlanOnlyHandoffCompactTask {
+    pub(crate) plan_text: String,
+}
+
 impl SessionTask for CompactTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Compact
@@ -42,6 +47,38 @@ impl SessionTask for CompactTask {
             );
             crate::compact::run_compact_task(session.clone(), ctx, input).await
         };
+        None
+    }
+}
+
+impl SessionTask for PlanOnlyHandoffCompactTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Compact
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.compact_plan_only_handoff"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        ctx: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        let session = session.clone_session();
+        session.services.session_telemetry.counter(
+            "codex.task.compact",
+            /*inc*/ 1,
+            &[("type", "plan_only_handoff")],
+        );
+        let _ = crate::compact::run_plan_only_handoff_compact_task(
+            session,
+            ctx,
+            self.plan_text.clone(),
+        )
+        .await;
         None
     }
 }

@@ -10412,6 +10412,16 @@
     "ThreadCompactStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "strategy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadCompactStrategy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         }
@@ -10426,6 +10436,30 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadCompactStartResponse",
       "type": "object"
+    },
+    "ThreadCompactStrategy": {
+      "oneOf": [
+        {
+          "properties": {
+            "planText": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "planOnlyHandoff"
+              ],
+              "title": "PlanOnlyHandoffThreadCompactStrategyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "planText",
+            "type"
+          ],
+          "title": "PlanOnlyHandoffThreadCompactStrategy",
+          "type": "object"
+        }
+      ]
     },
     "ThreadForkParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",

@@ -2991,10 +2991,23 @@ pub struct ThreadUnarchiveResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ThreadCompactStrategy {
+    PlanOnlyHandoff {
+        #[serde(rename = "planText")]
+        #[ts(rename = "planText")]
+        plan_text: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartParams {
     pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub strategy: Option<ThreadCompactStrategy>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -50,6 +50,7 @@ use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
 pub(crate) use compact::CompactTask;
+pub(crate) use compact::PlanOnlyHandoffCompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;

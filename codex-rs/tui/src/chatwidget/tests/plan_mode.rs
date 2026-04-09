@@ -3,7 +3,10 @@ use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn plan_implementation_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string());
+    let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
@@ -12,7 +15,10 @@ async fn plan_implementation_popup_snapshot() {
 
 #[tokio::test]
 async fn plan_implementation_popup_no_selected_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string());
+    let _ = drain_insert_history(&mut rx);
     chat.open_plan_implementation_prompt();
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
 
@@ -37,6 +43,40 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     };
     assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
     assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clear_context_emits_compact_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_plan_item_completed("## Plan\n\n1. Do the work".to_string());
+    let _ = drain_insert_history(&mut rx);
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::StartPlanOnlyCompactAndImplement {
+        plan_text,
+        collaboration_mode,
+    } = event
+    else {
+        panic!("expected StartPlanOnlyCompactAndImplement, got {event:?}");
+    };
+    assert_eq!(plan_text, "## Plan\n\n1. Do the work");
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_clear_context_option_is_disabled_without_plan_text() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(popup.contains(PLAN_IMPLEMENTATION_CLEAR_CONTEXT_YES));
+    assert!(popup.contains("Latest plan unavailable"));
 }
 
 #[tokio::test]
@@ -925,6 +965,54 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
         ),
         other => panic!("expected queued compact follow-up Op::UserTurn, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn successful_plan_only_compaction_auto_submits_implementation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let default_mode = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+
+    chat.on_task_started();
+    chat.set_pending_post_compact_implementation(default_mode);
+    chat.completed_context_compaction_this_turn = true;
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            ..
+        } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected auto-submitted Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn failed_plan_only_compaction_does_not_auto_submit_implementation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let default_mode = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+
+    chat.on_task_started();
+    chat.set_pending_post_compact_implementation(default_mode);
+    chat.completed_context_compaction_this_turn = false;
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ false);
+
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(chat.pending_post_compact_implementation.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]

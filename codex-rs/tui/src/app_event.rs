@@ -538,6 +538,12 @@ pub(crate) enum AppEvent {
         collaboration_mode: CollaborationModeMask,
     },
 
+    /// Compact the active thread to the latest completed plan, then auto-execute it.
+    StartPlanOnlyCompactAndImplement {
+        plan_text: String,
+        collaboration_mode: CollaborationModeMask,
+    },
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 

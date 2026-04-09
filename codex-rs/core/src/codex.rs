@@ -4743,6 +4743,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::compact(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::CompactPlanOnlyHandoff { plan_text } => {
+                    handlers::compact_plan_only_handoff(&sess, sub.id.clone(), plan_text).await;
+                    false
+                }
                 Op::DropMemories => {
                     handlers::drop_memories(&sess, &config, sub.id.clone()).await;
                     false
@@ -4850,6 +4854,7 @@ mod handlers {
     use crate::rollout::RolloutRecorder;
     use crate::rollout::session_index;
     use crate::tasks::CompactTask;
+    use crate::tasks::PlanOnlyHandoffCompactTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
@@ -5360,6 +5365,17 @@ mod handlers {
                 text_elements: Vec::new(),
             }],
             CompactTask,
+        )
+        .await;
+    }
+
+    pub async fn compact_plan_only_handoff(sess: &Arc<Session>, sub_id: String, plan_text: String) {
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+
+        sess.spawn_task(
+            turn_context,
+            Vec::new(),
+            PlanOnlyHandoffCompactTask { plan_text },
         )
         .await;
     }

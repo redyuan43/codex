@@ -5438,6 +5438,32 @@ impl App {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
             }
+            AppEvent::StartPlanOnlyCompactAndImplement {
+                plan_text,
+                collaboration_mode,
+            } => {
+                let Some(thread_id) = self.active_thread_id else {
+                    self.chat_widget
+                        .add_error_message("No active thread is available.".to_string());
+                    return Ok(AppRunControl::Continue);
+                };
+                self.chat_widget
+                    .set_pending_post_compact_implementation(collaboration_mode);
+                if let Err(err) = app_server
+                    .thread_compact_start_with_strategy(
+                        thread_id,
+                        Some(
+                            codex_app_server_protocol::ThreadCompactStrategy::PlanOnlyHandoff {
+                                plan_text,
+                            },
+                        ),
+                    )
+                    .await
+                {
+                    self.chat_widget.clear_pending_post_compact_implementation();
+                    return Err(err);
+                }
+            }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();
             }

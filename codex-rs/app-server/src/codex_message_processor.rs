@@ -3272,7 +3272,10 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadCompactStartParams,
     ) {
-        let ThreadCompactStartParams { thread_id } = params;
+        let ThreadCompactStartParams {
+            thread_id,
+            strategy,
+        } = params;
 
         let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
@@ -3282,10 +3285,14 @@ impl CodexMessageProcessor {
             }
         };
 
-        match self
-            .submit_core_op(&request_id, thread.as_ref(), Op::Compact)
-            .await
-        {
+        let op = match strategy {
+            Some(codex_app_server_protocol::ThreadCompactStrategy::PlanOnlyHandoff {
+                plan_text,
+            }) => Op::CompactPlanOnlyHandoff { plan_text },
+            None => Op::Compact,
+        };
+
+        match self.submit_core_op(&request_id, thread.as_ref(), op).await {
             Ok(_) => {
                 self.outgoing
                     .send_response(request_id, ThreadCompactStartResponse {})

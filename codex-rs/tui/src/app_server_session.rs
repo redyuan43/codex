@@ -28,6 +28,7 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadCompactStrategy;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -513,6 +514,15 @@ impl AppServerSession {
     }
 
     pub(crate) async fn thread_compact_start(&mut self, thread_id: ThreadId) -> Result<()> {
+        self.thread_compact_start_with_strategy(thread_id, None)
+            .await
+    }
+
+    pub(crate) async fn thread_compact_start_with_strategy(
+        &mut self,
+        thread_id: ThreadId,
+        strategy: Option<ThreadCompactStrategy>,
+    ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadCompactStartResponse = self
             .client
@@ -520,6 +530,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadCompactStartParams {
                     thread_id: thread_id.to_string(),
+                    strategy,
                 },
             })
             .await

@@ -1,6 +1,42 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ThreadCompactStrategy": {
+      "oneOf": [
+        {
+          "properties": {
+            "planText": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "planOnlyHandoff"
+              ],
+              "title": "PlanOnlyHandoffThreadCompactStrategyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "planText",
+            "type"
+          ],
+          "title": "PlanOnlyHandoffThreadCompactStrategy",
+          "type": "object"
+        }
+      ]
+    }
+  },
   "properties": {
+    "strategy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThreadCompactStrategy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "threadId": {
       "type": "string"
     }
