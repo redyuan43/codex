@@ -482,6 +482,8 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     // Current status header shown in the status indicator.
     current_status_header: String,
+    // Best-effort one-line summary of the current or last task, shown in the empty composer.
+    live_task_summary: Option<String>,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
@@ -736,6 +738,22 @@ impl ChatWidget {
         self.bottom_pane.update_status(header, details);
     }
 
+    fn set_live_task_summary(&mut self, summary: Option<String>) {
+        let normalized = summary.and_then(|summary| normalize_live_task_summary(&summary));
+        if self.live_task_summary == normalized {
+            return;
+        }
+        self.live_task_summary = normalized.clone();
+        self.bottom_pane.set_live_placeholder_summary(normalized);
+    }
+
+    fn update_live_task_summary_from_header(&mut self, header: &str) {
+        if header == "Working" {
+            return;
+        }
+        self.set_live_task_summary(Some(header.to_string()));
+    }
+
     /// Convenience wrapper around [`Self::set_status`];
     /// updates the status indicator header and clears any existing details.
     fn set_status_header(&mut self, header: String) {
@@ -881,6 +899,8 @@ impl ChatWidget {
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.set_status_header(header);
+            let header = self.current_status_header.clone();
+            self.update_live_task_summary_from_header(&header);
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
@@ -919,6 +939,7 @@ impl ChatWidget {
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
+        self.set_live_task_summary(None);
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -1211,6 +1232,8 @@ impl ChatWidget {
                     format!("Booting MCP server: {first}")
                 };
                 self.set_status_header(header);
+                let header = self.current_status_header.clone();
+                self.update_live_task_summary_from_header(&header);
             }
         }
         self.request_redraw();
@@ -1411,6 +1434,8 @@ impl ChatWidget {
                 "Waiting for background terminal".to_string()
             };
             self.set_status_header(header);
+            let header = self.current_status_header.clone();
+            self.update_live_task_summary_from_header(&header);
             match &mut self.unified_exec_wait_streak {
                 Some(wait) if wait.process_id == ev.process_id => {
                     wait.update_command_display(command_display);
@@ -1619,6 +1644,8 @@ impl ChatWidget {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(message);
+        let header = self.current_status_header.clone();
+        self.update_live_task_summary_from_header(&header);
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -2080,6 +2107,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            live_task_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -2218,6 +2246,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            live_task_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -2345,6 +2374,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            live_task_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -5853,6 +5883,16 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn normalize_live_task_summary(summary: &str) -> Option<String> {
+    let normalized = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {

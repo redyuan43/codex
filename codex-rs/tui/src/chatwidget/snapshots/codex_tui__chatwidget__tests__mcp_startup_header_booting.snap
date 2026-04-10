@@ -1,11 +1,12 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 3930
 expression: terminal.backend()
 ---
 "                                                                                "
 "• Booting MCP server: alpha (0s • esc to interrupt)                             "
 "                                                                                "
 "                                                                                "
-"› Ask Codex to do anything                                                      "
+"› Booting MCP server: alpha                                                     "
 "                                                                                "
 "  ? for shortcuts                                            100% context left  "

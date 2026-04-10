@@ -819,6 +819,7 @@ async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
+        live_task_summary: None,
         retry_status_header: None,
         thread_id: None,
         forked_from: None,
@@ -3968,7 +3969,87 @@ async fn background_event_updates_status_header() {
 
     assert!(chat.bottom_pane.status_indicator_visible());
     assert_eq!(chat.current_status_header, "Waiting for `vim`");
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "",
+        "background event should not populate actual composer text"
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn reasoning_header_updates_live_placeholder_summary() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Investigating render path**".into(),
+        }),
+    });
+
+    assert_eq!(
+        chat.live_task_summary.as_deref(),
+        Some("Investigating render path")
+    );
+}
+
+#[tokio::test]
+async fn background_event_populates_live_placeholder_without_reasoning() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "bg-1".into(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Waiting for `vim`".to_string(),
+        }),
+    });
+
+    assert_eq!(chat.live_task_summary.as_deref(), Some("Waiting for `vim`"));
+}
+
+#[tokio::test]
+async fn live_placeholder_persists_after_turn_complete_and_clears_on_next_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Tracing failing snapshots**".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(
+        chat.live_task_summary.as_deref(),
+        Some("Tracing failing snapshots")
+    );
+
+    chat.handle_codex_event(Event {
+        id: "task-2".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    assert_eq!(chat.live_task_summary, None);
 }
 
 #[tokio::test]

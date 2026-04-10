@@ -265,6 +265,7 @@ pub(crate) struct ChatComposer {
     /// Invariant: attached images are labeled `[Image #1]..[Image #N]` in vec order.
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
+    live_placeholder_summary: Option<String>,
     is_task_running: bool,
     /// When false, the composer is temporarily read-only (e.g. during sandbox setup).
     input_enabled: bool,
@@ -358,6 +359,7 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
+            live_placeholder_summary: None,
             is_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
@@ -742,6 +744,11 @@ impl ChatComposer {
     /// Update the placeholder text without changing input enablement.
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.placeholder_text = placeholder;
+    }
+
+    /// Update the runtime task-summary placeholder shown when the composer is empty.
+    pub(crate) fn set_live_placeholder_summary(&mut self, summary: Option<String>) {
+        self.live_placeholder_summary = summary;
     }
 
     /// Move the cursor to the end of the current text buffer.
@@ -3021,7 +3028,10 @@ impl Renderable for ChatComposer {
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
             let text = if self.input_enabled {
-                self.placeholder_text.as_str().to_string()
+                self.live_placeholder_summary
+                    .as_deref()
+                    .unwrap_or(self.placeholder_text.as_str())
+                    .to_string()
             } else {
                 self.input_disabled_placeholder
                     .as_deref()

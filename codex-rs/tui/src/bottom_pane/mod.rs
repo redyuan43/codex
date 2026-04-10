@@ -453,6 +453,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_live_placeholder_summary(&mut self, summary: Option<String>) {
+        self.composer.set_live_placeholder_summary(summary);
+        self.request_redraw();
+    }
+
     /// Update the status indicator header (defaults to "Working") and details below it.
     ///
     /// Passing `None` clears any existing details. No-ops if the status indicator is not active.
@@ -1073,6 +1078,28 @@ mod tests {
         let height = pane.desired_height(width);
         let area = Rect::new(0, 0, width, height);
         assert_snapshot!("status_only_snapshot", render_snapshot(&pane, area));
+    }
+
+    #[test]
+    fn live_placeholder_summary_overrides_base_placeholder() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+        pane.set_live_placeholder_summary(Some("Tracing failing TUI snapshots".to_string()));
+
+        let area = Rect::new(0, 0, 48, 3);
+        let rendered = render_snapshot(&pane, area);
+        assert!(rendered.contains("Tracing failing TUI snapshots"));
+        assert!(!rendered.contains("Ask Codex to do anything"));
     }
 
     #[test]

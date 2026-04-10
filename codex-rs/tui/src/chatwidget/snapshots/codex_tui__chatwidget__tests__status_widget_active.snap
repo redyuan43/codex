@@ -1,11 +1,12 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 3908
 expression: terminal.backend()
 ---
 "                                                                                "
 "• Analyzing (0s • esc to interrupt)                                             "
 "                                                                                "
 "                                                                                "
-"› Ask Codex to do anything                                                      "
+"› Analyzing                                                                     "
 "                                                                                "
 "  ? for shortcuts                                            100% context left  "
