@@ -6,6 +6,6 @@ expression: normalize_snapshot_paths(rendered)
   └ cargo test -p codex-core -- --exact…
 
 
-› Ask Codex to do anything
+› Waiting for background terminal
 
   gpt-5.3-codex default · /tmp/project

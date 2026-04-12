@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex HTTP Bridge Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 18px;
+        background: #f6f6f6;
+        color: #111;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        gap: 16px;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 12px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+      }
+      .sidebar {
+        display: grid;
+        gap: 10px;
+      }
+      .row {
+        display: grid;
+        gap: 8px;
+      }
+      .btn-row {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: max-content;
+        gap: 8px;
+      }
+      label {
+        font-size: 12px;
+        color: #444;
+      }
+      input, textarea, button {
+        font-size: 14px;
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+      }
+      textarea {
+        min-height: 70px;
+        resize: vertical;
+      }
+      button {
+        background: #111;
+        color: #fff;
+        border-color: #111;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #fff;
+        color: #111;
+      }
+      .muted {
+        color: #666;
+        font-size: 12px;
+      }
+      .thread-list {
+        display: grid;
+        gap: 6px;
+        max-height: 420px;
+        overflow: auto;
+        border-top: 1px solid #eee;
+        padding-top: 8px;
+      }
+      .thread-item {
+        padding: 8px;
+        border: 1px solid #eee;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .thread-item.active {
+        border-color: #111;
+        background: #fafafa;
+      }
+      .main {
+        display: grid;
+        gap: 12px;
+      }
+      .chat {
+        display: grid;
+        gap: 10px;
+        max-height: 520px;
+        overflow: auto;
+      }
+      .msg {
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid #eee;
+        white-space: pre-wrap;
+      }
+      .msg.user {
+        background: #f1f1f1;
+      }
+      .msg.assistant {
+        background: #fff;
+      }
+      .loading {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: #666;
+        font-size: 13px;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #999;
+        animation: bounce 1s infinite ease-in-out;
+      }
+      .dot:nth-child(2) { animation-delay: 0.15s; }
+      .dot:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes bounce {
+        0%, 80%, 100% { transform: scale(0.8); opacity: 0.4; }
+        40% { transform: scale(1.2); opacity: 1; }
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      .question {
+        border: 1px dashed #aaa;
+        border-radius: 8px;
+        padding: 10px;
+        margin-top: 8px;
+      }
+      .options {
+        display: grid;
+        gap: 4px;
+        margin: 6px 0;
+      }
+      .quick-select {
+        border: 1px dashed #ccc;
+        border-radius: 8px;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+      .wait-panel {
+        display: none;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        border: 1px solid #eee;
+        border-radius: 8px;
+        background: #fafafa;
+      }
+      .wait-panel.active {
+        display: flex;
+      }
+      .pulse {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #666;
+        animation: pulse 1.6s infinite ease-in-out;
+      }
+      @keyframes pulse {
+        0% { transform: scale(0.9); opacity: 0.5; }
+        50% { transform: scale(1.2); opacity: 1; }
+        100% { transform: scale(0.9); opacity: 0.5; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar card">
+        <div class="row">
+          <div><strong>Bridge</strong></div>
+          <div class="btn-row">
+            <button id="startBridgeBtn">Start</button>
+            <button id="stopBridgeBtn" class="secondary">Stop</button>
+          </div>
+          <div class="muted" id="bridgeStatus">Status: unknown</div>
+        </div>
+
+        <div class="row">
+          <div><strong>Threads</strong></div>
+          <div class="btn-row">
+            <button id="newThreadBtn">New Chat</button>
+            <button id="refreshThreadsBtn" class="secondary">Refresh</button>
+          </div>
+          <div class="muted" id="threadInfo">No active thread</div>
+          <div class="thread-list" id="threadList"></div>
+          <div class="btn-row">
+            <button id="prevPageBtn" class="secondary">Prev</button>
+            <button id="nextPageBtn" class="secondary">Next</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="card chat" id="chatArea"></div>
+
+        <div class="card row">
+          <label>Message</label>
+          <div id="waitPanel" class="wait-panel">
+            <span class="pulse"></span>
+            <span id="waitText">处理中…</span>
+            <span class="muted" id="waitTimer">00:00</span>
+          </div>
+          <textarea id="messageInput"></textarea>
+          <div class="btn-row">
+            <button id="sendBtn">Send</button>
+            <button id="clearBtn" class="secondary">Clear</button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const BASE_URL = window.location.origin.startsWith("http")
+        ? window.location.origin
+        : "http://127.0.0.1:7100";
+
+      const chatArea = document.getElementById("chatArea");
+      const messageInput = document.getElementById("messageInput");
+      const threadInfo = document.getElementById("threadInfo");
+      const threadListEl = document.getElementById("threadList");
+      const bridgeStatusEl = document.getElementById("bridgeStatus");
+      const waitPanel = document.getElementById("waitPanel");
+      const waitText = document.getElementById("waitText");
+      const waitTimer = document.getElementById("waitTimer");
+      let toolArea = null;
+
+      const PAGE_SIZE = 10;
+      let currentPage = 0;
+      let currentThreadId = null;
+      let isStreaming = false;
+      let activeAssistantIndex = null;
+      let lastAssistantText = "";
+      let loadingEl = null;
+      let suppressChoiceText = true;
+      let toolRequested = false;
+      let waitStartedAt = null;
+      let waitInterval = null;
+      let hintInterval = null;
+      let hintIndex = 0;
+
+      function getThreadStore() {
+        const raw = localStorage.getItem("codex.demo.threads");
+        return raw ? JSON.parse(raw) : [];
+      }
+
+      function setThreadStore(list) {
+        localStorage.setItem("codex.demo.threads", JSON.stringify(list));
+      }
+
+      function getMessages(threadId) {
+        const raw = localStorage.getItem(`codex.demo.thread.${threadId}.messages`);
+        return raw ? JSON.parse(raw) : [];
+      }
+
+      function setMessages(threadId, messages) {
+        localStorage.setItem(`codex.demo.thread.${threadId}.messages`, JSON.stringify(messages));
+      }
+
+      function addThread(thread) {
+        const list = getThreadStore();
+        const existing = list.find((t) => t.id === thread.id);
+        const updated = { ...thread, updatedAt: Date.now() };
+        if (!existing) {
+          list.unshift(updated);
+        } else {
+          Object.assign(existing, updated);
+        }
+        setThreadStore(list);
+        renderThreadList();
+      }
+
+      function bumpThread(threadId) {
+        const list = getThreadStore();
+        const idx = list.findIndex((t) => t.id === threadId);
+        if (idx !== -1) {
+          list[idx].updatedAt = Date.now();
+          const item = list.splice(idx, 1)[0];
+          list.unshift(item);
+          setThreadStore(list);
+        }
+      }
+
+      function renderThreadList() {
+        const list = getThreadStore().sort((a, b) => b.updatedAt - a.updatedAt);
+        const start = currentPage * PAGE_SIZE;
+        const page = list.slice(start, start + PAGE_SIZE);
+
+        threadListEl.innerHTML = "";
+        if (page.length === 0) {
+          threadListEl.innerHTML = "<div class=\"muted\">No threads</div>";
+          return;
+        }
+
+        page.forEach((item) => {
+          const el = document.createElement("div");
+          el.className = "thread-item" + (item.id === currentThreadId ? " active" : "");
+          el.textContent = item.title || `Thread ${item.id.slice(0, 8)}`;
+          el.addEventListener("click", () => loadThread(item.id));
+          threadListEl.appendChild(el);
+        });
+      }
+
+      function renderMessages() {
+        chatArea.innerHTML = "";
+        if (!currentThreadId) {
+          chatArea.innerHTML = "<div class=\"muted\">No active thread.</div>";
+          return;
+        }
+
+        const messages = getMessages(currentThreadId);
+        messages.forEach((msg) => {
+          const el = document.createElement("div");
+          el.className = `msg ${msg.role}`;
+          if (msg.isHtml) {
+            el.innerHTML = msg.content;
+          } else {
+            el.textContent = msg.content;
+          }
+          chatArea.appendChild(el);
+        });
+        if (loadingEl) {
+          chatArea.appendChild(loadingEl);
+        }
+        chatArea.scrollTop = chatArea.scrollHeight;
+      }
+
+      async function postJson(path, body) {
+        const res = await fetch(`${BASE_URL}${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
+        return res.json();
+      }
+
+      async function startBridge() {
+        await fetch(`${BASE_URL}/bridge/start`, { method: "POST" });
+        bridgeStatusEl.textContent = "Status: starting";
+        await initializeWithRetry();
+      }
+
+      async function stopBridge() {
+        await fetch(`${BASE_URL}/bridge/stop`, { method: "POST" });
+        bridgeStatusEl.textContent = "Status: stopped";
+      }
+
+      async function initializeWithRetry() {
+        for (let i = 0; i < 10; i++) {
+          try {
+            await postJson("/api/initialize", {});
+            bridgeStatusEl.textContent = "Status: running";
+            return;
+          } catch (err) {
+            await new Promise((r) => setTimeout(r, 400));
+          }
+        }
+        bridgeStatusEl.textContent = "Status: failed";
+      }
+
+      async function newThread() {
+        const data = await postJson("/api/thread/start", { cwd: "/home/ivan/github/codex" });
+        currentThreadId = data.thread.id;
+        threadInfo.textContent = `Active: ${currentThreadId}`;
+        addThread({ id: currentThreadId, title: `Thread ${currentThreadId.slice(0, 8)}` });
+        setMessages(currentThreadId, []);
+        renderMessages();
+      }
+
+      async function loadThread(threadId) {
+        currentThreadId = threadId;
+        threadInfo.textContent = `Active: ${currentThreadId}`;
+        await postJson("/api/thread/resume", { threadId });
+        renderThreadList();
+        renderMessages();
+      }
+
+      function appendMessage(role, content) {
+        const messages = getMessages(currentThreadId);
+        messages.push({ role, content, ts: Date.now(), isHtml: false });
+        setMessages(currentThreadId, messages);
+        bumpThread(currentThreadId);
+        renderMessages();
+        return messages.length - 1;
+      }
+
+      function updateAssistantMessage(index, content, isHtml = false) {
+        const messages = getMessages(currentThreadId);
+        if (!messages[index]) return;
+        messages[index].content = content;
+        messages[index].isHtml = isHtml;
+        setMessages(currentThreadId, messages);
+        renderMessages();
+      }
+
+      function showLoading(show) {
+        if (show) {
+          const el = document.createElement("div");
+          el.className = "loading";
+          el.innerHTML = "<span>Waiting</span><span class=\"dot\"></span><span class=\"dot\"></span><span class=\"dot\"></span>";
+          loadingEl = el;
+        } else {
+          loadingEl = null;
+        }
+        renderMessages();
+      }
+
+      function startWaitPanel() {
+        waitStartedAt = Date.now();
+        hintIndex = 0;
+        const hints = [
+          "正在整理思路…",
+          "正在检索上下文…",
+          "正在生成回答…",
+          "正在检查输出格式…",
+        ];
+
+        waitPanel.classList.add("active");
+        waitText.textContent = hints[0];
+        waitTimer.textContent = "00:00";
+
+        clearInterval(waitInterval);
+        clearInterval(hintInterval);
+
+        waitInterval = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - waitStartedAt) / 1000);
+          const mins = String(Math.floor(elapsed / 60)).padStart(2, "0");
+          const secs = String(elapsed % 60).padStart(2, "0");
+          waitTimer.textContent = `${mins}:${secs}`;
+        }, 500);
+
+        hintInterval = setInterval(() => {
+          hintIndex = (hintIndex + 1) % hints.length;
+          waitText.textContent = hints[hintIndex];
+        }, 6000);
+      }
+
+      function stopWaitPanel() {
+        waitPanel.classList.remove("active");
+        clearInterval(waitInterval);
+        clearInterval(hintInterval);
+        waitInterval = null;
+        hintInterval = null;
+      }
+
+      function detectQuickChoices(text) {
+        const optionLine = /^\s*([A-Z])[\.\)、]\s+(.+)$/gm;
+        const matches = Array.from(text.matchAll(optionLine)).map((match) => ({
+          label: match[1],
+          text: match[2].trim(),
+        }));
+        if (matches.length > 0) return matches;
+
+        const slashPattern = text.match(/\b([A-Z])(?:\s*[/,]\s*[A-Z]){1,6}\b/);
+        if (slashPattern) {
+          return slashPattern[0].split(/\s*[/,]\s*/).filter(Boolean).map((c) => ({
+            label: c,
+            text: "",
+          }));
+        }
+        const numPattern = text.match(/\b(\d)(?:\s*[/,]\s*\d){1,6}\b/);
+        if (numPattern) {
+          return numPattern[0].split(/\s*[/,]\s*/).filter(Boolean).map((c) => ({
+            label: c,
+            text: "",
+          }));
+        }
+        return null;
+      }
+
+      function isMultiSelect(text) {
+        if (/多选|多个正确|可多选/.test(text)) return true;
+        if (/单选|只能选|仅选/.test(text)) return false;
+        return true;
+      }
+
+      function renderQuickSelect(choices, promptText) {
+        if (!choices || choices.length === 0) return;
+        toolArea.innerHTML = "";
+        const wrap = document.createElement("div");
+        wrap.className = "quick-select";
+        wrap.innerHTML = "<strong>Quick Select</strong>";
+
+        const prompt = document.createElement("div");
+        prompt.className = "mono";
+        prompt.textContent = promptText.trim();
+        wrap.appendChild(prompt);
+
+        const opts = document.createElement("div");
+        opts.className = "options";
+        const selected = new Set();
+        const allowMultiple = isMultiSelect(promptText);
+
+        choices.forEach((choice) => {
+          const label = document.createElement("label");
+          const input = document.createElement("input");
+          input.type = allowMultiple ? "checkbox" : "radio";
+          input.name = "quick-select";
+          input.value = choice.label;
+          input.addEventListener("change", () => {
+            if (allowMultiple) {
+              if (input.checked) selected.add(choice.label);
+              else selected.delete(choice.label);
+            } else {
+              selected.clear();
+              if (input.checked) selected.add(choice.label);
+            }
+          });
+          label.appendChild(input);
+          if (choice.text) {
+            label.appendChild(document.createTextNode(` ${choice.label}. ${choice.text}`));
+          } else {
+            label.appendChild(document.createTextNode(` ${choice.label}`));
+          }
+          opts.appendChild(label);
+        });
+        wrap.appendChild(opts);
+
+        const allowOther = /其他|Other/i.test(promptText);
+        let otherInput = null;
+        if (allowOther) {
+          otherInput = document.createElement("input");
+          otherInput.type = "text";
+          otherInput.placeholder = "Other (optional)";
+          wrap.appendChild(otherInput);
+        }
+
+        const sendBtn = document.createElement("button");
+        sendBtn.textContent = "Send Selection";
+        sendBtn.addEventListener("click", async () => {
+          const otherValue = otherInput ? otherInput.value.trim() : "";
+          if (selected.size === 0 && !otherValue) return;
+          const values = Array.from(selected);
+          if (otherValue) values.push(otherValue);
+          messageInput.value = values.join(", ");
+          await sendMessage();
+        });
+        wrap.appendChild(sendBtn);
+
+        toolArea.appendChild(wrap);
+      }
+
+      function clearToolArea() {
+        if (!toolArea) return;
+        toolArea.remove();
+        toolArea = null;
+      }
+
+      function parseQuestionBlocks(text) {
+        const lines = text.split(/\r?\n/);
+        const blocks = [];
+        let current = null;
+        lines.forEach((line) => {
+          const qMatch = line.match(/^Question\s*\d+.*?:\s*(.+)$/i);
+          if (qMatch) {
+            if (current) blocks.push(current);
+            current = { title: line.trim(), question: qMatch[1].trim(), options: [] };
+            return;
+          }
+
+          const optMatch = line.match(/^\s*[-*]\s*([A-Za-z0-9]+)[:.\)]\s*(.+)$/);
+          if (optMatch && current) {
+            current.options.push({ label: optMatch[1], text: optMatch[2].trim() });
+            return;
+          }
+
+          const listMatch = line.match(/^\s*[-*]\s*(.+)$/);
+          if (listMatch && current) {
+            const raw = listMatch[1].trim();
+            if (raw.includes("/") || raw.includes(",")) {
+              raw.split(/[/,]/).map((item) => item.trim()).filter(Boolean).forEach((item) => {
+                current.options.push({ label: item, text: "" });
+              });
+            }
+          }
+        });
+        if (current) blocks.push(current);
+        return blocks.length > 0 ? blocks : null;
+      }
+
+      function isMultiFromText(text) {
+        return /multi|multiple|多选|多个正确/i.test(text);
+      }
+
+      function renderPseudoQuestions(blocks, fullText) {
+        toolArea = document.createElement("div");
+        toolArea.className = "msg assistant";
+        const wrap = document.createElement("div");
+        wrap.className = "quick-select";
+        wrap.innerHTML = "<strong>Quick Select</strong>";
+
+        const prompt = document.createElement("div");
+        prompt.className = "mono";
+        prompt.textContent = "Detected questions. Select options below.";
+        wrap.appendChild(prompt);
+
+        const answers = {};
+
+        blocks.forEach((block, idx) => {
+          const qWrap = document.createElement("div");
+          qWrap.className = "question";
+          const title = document.createElement("div");
+          title.textContent = block.title || `Question ${idx + 1}`;
+          qWrap.appendChild(title);
+
+          const opts = document.createElement("div");
+          opts.className = "options";
+          const allowMultiple = isMultiFromText(block.title + " " + block.question);
+
+          block.options.forEach((opt) => {
+            const label = document.createElement("label");
+            const input = document.createElement("input");
+            input.type = allowMultiple ? "checkbox" : "radio";
+            input.name = `q${idx}`;
+            input.value = opt.label;
+            input.addEventListener("change", () => {
+              const selected = Array.from(opts.querySelectorAll("input:checked"))
+                .map((el) => el.value);
+              answers[idx] = selected;
+            });
+            label.appendChild(input);
+            if (opt.text) {
+              label.appendChild(document.createTextNode(` ${opt.label}. ${opt.text}`));
+            } else {
+              label.appendChild(document.createTextNode(` ${opt.label}`));
+            }
+            opts.appendChild(label);
+          });
+
+          qWrap.appendChild(opts);
+          wrap.appendChild(qWrap);
+        });
+
+        const sendBtn = document.createElement("button");
+        sendBtn.textContent = "Send Selection";
+        sendBtn.addEventListener("click", async () => {
+          const parts = [];
+          blocks.forEach((_, idx) => {
+            const selected = answers[idx] || [];
+            if (selected.length > 0) parts.push(selected.join(","));
+          });
+          if (parts.length === 0) return;
+          messageInput.value = parts.join("\n");
+          await sendMessage();
+        });
+        wrap.appendChild(sendBtn);
+        toolArea.appendChild(wrap);
+        chatArea.appendChild(toolArea);
+        chatArea.scrollTop = chatArea.scrollHeight;
+
+        if (suppressChoiceText) {
+          const safe = (fullText || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          const collapsed = `Multiple-choice detected. <details><summary>Show original text</summary><pre>${safe}</pre></details>`;
+          updateAssistantMessage(activeAssistantIndex, collapsed, true);
+        }
+      }
+      async function sendMessage() {
+        if (!currentThreadId || isStreaming) return;
+        const content = messageInput.value.trim();
+        if (!content) return;
+
+        messageInput.value = "";
+        appendMessage("user", content);
+        activeAssistantIndex = appendMessage("assistant", "");
+        isStreaming = true;
+        lastAssistantText = "";
+        clearToolArea();
+        showLoading(true);
+        startWaitPanel();
+
+        const res = await fetch(`${BASE_URL}/api/turn/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ threadId: currentThreadId, message: content }),
+        });
+
+        if (!res.ok || !res.body) {
+          isStreaming = false;
+          throw new Error(`turn/start failed: ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let assistantText = "";
+        let cachedFinal = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          let idx;
+          while ((idx = buffer.indexOf("\n\n")) !== -1) {
+            const chunk = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+
+            const lines = chunk.split("\n");
+            const eventLine = lines.find((l) => l.startsWith("event:"));
+            const dataLine = lines.find((l) => l.startsWith("data:"));
+            if (!eventLine || !dataLine) continue;
+
+            const event = eventLine.slice("event:".length).trim();
+            const data = JSON.parse(dataLine.slice("data:".length).trim());
+
+            if (event === "item/agentMessage/delta") {
+              const delta = data.params?.delta ?? "";
+              assistantText += delta;
+              lastAssistantText = assistantText;
+              cachedFinal = assistantText;
+              updateAssistantMessage(activeAssistantIndex, assistantText);
+            }
+
+            if (event === "item/tool/requestUserInput") {
+              toolRequested = true;
+              renderToolRequest(data.id, data.params?.questions || []);
+            }
+
+            if (event === "turn/completed") {
+              isStreaming = false;
+            }
+          }
+        }
+
+        isStreaming = false;
+        showLoading(false);
+        stopWaitPanel();
+        if (!toolRequested) {
+          const blocks = parseQuestionBlocks(lastAssistantText || "");
+          if (blocks) {
+            renderPseudoQuestions(blocks, lastAssistantText || "");
+            return;
+          }
+        }
+
+        const choices = detectQuickChoices(lastAssistantText || "");
+        if (choices) {
+          if (suppressChoiceText) {
+            const original = lastAssistantText || "";
+            const safe = original.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            const collapsed = `Multiple-choice detected. <details><summary>Show original text</summary><pre>${safe}</pre></details>`;
+            updateAssistantMessage(activeAssistantIndex, collapsed, true);
+          }
+          renderQuickSelect(choices, lastAssistantText || "");
+        }
+      }
+
+      function renderToolRequest(requestId, questions) {
+        clearToolArea();
+        toolArea = document.createElement("div");
+        toolArea.className = "msg assistant";
+        const container = document.createElement("div");
+        container.className = "row";
+
+        const header = document.createElement("div");
+        header.className = "mono";
+        header.textContent = `requestId: ${JSON.stringify(requestId)}`;
+        container.appendChild(header);
+
+        const answers = {};
+
+        questions.forEach((q) => {
+          const qWrap = document.createElement("div");
+          qWrap.className = "question";
+
+          const title = document.createElement("div");
+          title.textContent = `${q.header || "Question"}: ${q.question}`;
+          qWrap.appendChild(title);
+
+          const opts = document.createElement("div");
+          opts.className = "options";
+
+          (q.options || []).forEach((opt) => {
+            const label = document.createElement("label");
+            const input = document.createElement("input");
+            input.type = q.multiple ? "checkbox" : "radio";
+            input.name = q.id;
+            input.value = opt.label;
+            input.addEventListener("change", () => {
+              const selected = Array.from(opts.querySelectorAll("input:checked"))
+                .map((el) => el.value);
+              answers[q.id] = selected;
+            });
+            label.appendChild(input);
+            label.appendChild(document.createTextNode(` ${opt.label}: ${opt.description}`));
+            opts.appendChild(label);
+          });
+
+          qWrap.appendChild(opts);
+          const otherInput = document.createElement("input");
+          otherInput.type = "text";
+          otherInput.placeholder = "Other (optional)";
+          otherInput.addEventListener("input", () => {
+            const selected = Array.from(opts.querySelectorAll("input:checked"))
+              .map((el) => el.value);
+            const otherValue = otherInput.value.trim();
+            const merged = otherValue ? [...selected, otherValue] : selected;
+            answers[q.id] = merged;
+          });
+          qWrap.appendChild(otherInput);
+          container.appendChild(qWrap);
+        });
+
+        const sendBtn = document.createElement("button");
+        sendBtn.textContent = "Submit Answers";
+        sendBtn.addEventListener("click", async () => {
+          questions.forEach((q) => {
+            if (!answers[q.id]) answers[q.id] = [];
+          });
+          await fetch(`${BASE_URL}/api/tool/answer`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ requestId, answers }),
+          });
+          toolArea.innerHTML = "<div class=\"muted\">Answers sent.</div>";
+        });
+
+        container.appendChild(sendBtn);
+        toolArea.appendChild(container);
+        chatArea.appendChild(toolArea);
+        chatArea.scrollTop = chatArea.scrollHeight;
+      }
+
+      document.getElementById("startBridgeBtn").addEventListener("click", startBridge);
+      document.getElementById("stopBridgeBtn").addEventListener("click", stopBridge);
+      document.getElementById("newThreadBtn").addEventListener("click", newThread);
+      document.getElementById("refreshThreadsBtn").addEventListener("click", renderThreadList);
+      document.getElementById("prevPageBtn").addEventListener("click", () => {
+        currentPage = Math.max(0, currentPage - 1);
+        renderThreadList();
+      });
+      document.getElementById("nextPageBtn").addEventListener("click", () => {
+        currentPage += 1;
+        renderThreadList();
+      });
+      document.getElementById("sendBtn").addEventListener("click", sendMessage);
+      document.getElementById("clearBtn").addEventListener("click", () => {
+        if (!currentThreadId) return;
+        setMessages(currentThreadId, []);
+        renderMessages();
+      });
+
+      renderThreadList();
+      renderMessages();
+    </script>
+  </body>
+</html>
