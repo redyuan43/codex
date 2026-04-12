@@ -1,8 +1,4 @@
 use crate::bottom_pane::FeedbackAudience;
-#[cfg(test)]
-use crate::legacy_core::append_message_history_entry;
-use crate::legacy_core::config::Config;
-use crate::legacy_core::message_history_metadata;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerClient;
@@ -10,6 +6,8 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AlarmDelivery;
+use codex_app_server_protocol::AlarmTrigger;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -28,10 +26,18 @@ use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAlarm;
+use codex_app_server_protocol::ThreadAlarmCreateParams;
+use codex_app_server_protocol::ThreadAlarmCreateResponse;
+use codex_app_server_protocol::ThreadAlarmDeleteParams;
+use codex_app_server_protocol::ThreadAlarmDeleteResponse;
+use codex_app_server_protocol::ThreadAlarmListParams;
+use codex_app_server_protocol::ThreadAlarmListResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
+use codex_app_server_protocol::ThreadCompactStrategy;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -59,7 +65,6 @@ use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
@@ -69,6 +74,10 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
+#[cfg(test)]
+use codex_core::append_message_history_entry;
+use codex_core::config::Config;
+use codex_core::message_history_metadata;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelAvailabilityNux;
@@ -284,15 +293,6 @@ impl AppServerSession {
     }
 
     pub(crate) async fn start_thread(&mut self, config: &Config) -> Result<AppServerStartedThread> {
-        self.start_thread_with_session_start_source(config, /*session_start_source*/ None)
-            .await
-    }
-
-    pub(crate) async fn start_thread_with_session_start_source(
-        &mut self,
-        config: &Config,
-        session_start_source: Option<ThreadStartSource>,
-    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadStartResponse = self
             .client
@@ -302,11 +302,32 @@ impl AppServerSession {
                     config,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
-                    session_start_source,
                 ),
             })
             .await
             .wrap_err("thread/start failed during TUI bootstrap")?;
+        started_thread_from_start_response(response, config).await
+    }
+
+    pub(crate) async fn start_ephemeral_thread_with_base_instructions(
+        &mut self,
+        config: &Config,
+        base_instructions: String,
+    ) -> Result<AppServerStartedThread> {
+        let request_id = self.next_request_id();
+        let mut params = thread_start_params_from_config(
+            config,
+            self.thread_params_mode(),
+            self.remote_cwd_override.as_deref(),
+        );
+        params.ephemeral = Some(true);
+        params.persist_extended_history = false;
+        params.base_instructions = Some(base_instructions);
+        let response: ThreadStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadStart { request_id, params })
+            .await
+            .wrap_err("thread/start failed during alarm spec parsing")?;
         started_thread_from_start_response(response, config).await
     }
 
@@ -408,6 +429,68 @@ impl AppServerSession {
         Ok(response.thread)
     }
 
+    pub(crate) async fn thread_alarm_create(
+        &mut self,
+        thread_id: ThreadId,
+        trigger: AlarmTrigger,
+        prompt: String,
+        delivery: AlarmDelivery,
+    ) -> Result<ThreadAlarm> {
+        let request_id = self.next_request_id();
+        let response: ThreadAlarmCreateResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAlarmCreate {
+                request_id,
+                params: ThreadAlarmCreateParams {
+                    thread_id: thread_id.to_string(),
+                    trigger,
+                    prompt,
+                    delivery,
+                },
+            })
+            .await
+            .wrap_err("thread/alarm/create failed in TUI")?;
+        Ok(response.alarm)
+    }
+
+    pub(crate) async fn thread_alarm_delete(
+        &mut self,
+        thread_id: ThreadId,
+        id: String,
+    ) -> Result<bool> {
+        let request_id = self.next_request_id();
+        let response: ThreadAlarmDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAlarmDelete {
+                request_id,
+                params: ThreadAlarmDeleteParams {
+                    thread_id: thread_id.to_string(),
+                    id,
+                },
+            })
+            .await
+            .wrap_err("thread/alarm/delete failed in TUI")?;
+        Ok(response.deleted)
+    }
+
+    pub(crate) async fn thread_alarm_list(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<Vec<ThreadAlarm>> {
+        let request_id = self.next_request_id();
+        let response: ThreadAlarmListResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadAlarmList {
+                request_id,
+                params: ThreadAlarmListParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/alarm/list failed in TUI")?;
+        Ok(response.data)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn turn_start(
         &mut self,
@@ -432,7 +515,6 @@ impl AppServerSession {
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
-                    responsesapi_client_metadata: None,
                     cwd: Some(cwd),
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
@@ -483,7 +565,6 @@ impl AppServerSession {
                 params: TurnSteerParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
-                    responsesapi_client_metadata: None,
                     expected_turn_id: turn_id,
                 },
             })
@@ -526,6 +607,15 @@ impl AppServerSession {
     }
 
     pub(crate) async fn thread_compact_start(&mut self, thread_id: ThreadId) -> Result<()> {
+        self.thread_compact_start_with_strategy(thread_id, None)
+            .await
+    }
+
+    pub(crate) async fn thread_compact_start_with_strategy(
+        &mut self,
+        thread_id: ThreadId,
+        strategy: Option<ThreadCompactStrategy>,
+    ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadCompactStartResponse = self
             .client
@@ -533,6 +623,7 @@ impl AppServerSession {
                 request_id,
                 params: ThreadCompactStartParams {
                     thread_id: thread_id.to_string(),
+                    strategy,
                 },
             })
             .await
@@ -867,7 +958,6 @@ fn thread_start_params_from_config(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
-    session_start_source: Option<ThreadStartSource>,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
@@ -878,7 +968,6 @@ fn thread_start_params_from_config(
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(config),
         ephemeral: Some(config.ephemeral),
-        session_start_source,
         persist_extended_history: true,
         ..ThreadStartParams::default()
     }
@@ -1161,10 +1250,10 @@ fn app_server_credits_snapshot_to_core(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::legacy_core::config::ConfigBuilder;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
+    use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -1185,26 +1274,10 @@ mod tests {
             &config,
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
-            /*session_start_source*/ None,
         );
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
         assert_eq!(params.model_provider, Some(config.model_provider_id));
-    }
-
-    #[tokio::test]
-    async fn thread_start_params_can_mark_clear_source() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&temp_dir).await;
-
-        let params = thread_start_params_from_config(
-            &config,
-            ThreadParamsMode::Embedded,
-            /*remote_cwd_override*/ None,
-            Some(ThreadStartSource::Clear),
-        );
-
-        assert_eq!(params.session_start_source, Some(ThreadStartSource::Clear));
     }
 
     #[tokio::test]
@@ -1217,7 +1290,6 @@ mod tests {
             &config,
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
-            /*session_start_source*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),
@@ -1251,7 +1323,6 @@ mod tests {
             &config,
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
-            /*session_start_source*/ None,
         );
         let resume = thread_resume_params_from_config(
             config.clone(),

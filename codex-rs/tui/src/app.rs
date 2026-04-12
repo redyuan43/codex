@@ -1,3 +1,5 @@
+use crate::alarm_scheduler::format_alarm_summary;
+use crate::alarm_scheduler::parse_alarm_spec;
 use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
@@ -34,16 +36,6 @@ use crate::history_cell;
 use crate::history_cell::HistoryCell;
 #[cfg(not(debug_assertions))]
 use crate::history_cell::UpdateAvailableHistoryCell;
-use crate::legacy_core::append_message_history_entry;
-use crate::legacy_core::config::Config;
-use crate::legacy_core::config::ConfigBuilder;
-use crate::legacy_core::config::ConfigOverrides;
-use crate::legacy_core::config::edit::ConfigEdit;
-use crate::legacy_core::config::edit::ConfigEditsBuilder;
-use crate::legacy_core::config_loader::ConfigLayerStackOrdering;
-use crate::legacy_core::lookup_message_history_entry;
-#[cfg(target_os = "windows")]
-use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -57,7 +49,6 @@ use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
-use crate::resume_picker::SessionTarget;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 use crate::tui;
@@ -92,12 +83,21 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
-use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_core::append_message_history_entry;
+use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEdit;
+use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::lookup_message_history_entry;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -321,8 +321,7 @@ fn session_summary(
     thread_name: Option<String>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| FinalOutput::from(token_usage).to_string());
-    let resume_command =
-        crate::legacy_core::util::resume_command(thread_name.as_deref(), thread_id);
+    let resume_command = codex_core::util::resume_command(thread_name.as_deref(), thread_id);
 
     if usage_line.is_none() && resume_command.is_none() {
         return None;
@@ -480,7 +479,7 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
 
 fn emit_system_bwrap_warning(app_event_tx: &AppEventSender, config: &Config) {
     let Some(message) =
-        crate::legacy_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
+        codex_core::config::system_bwrap_warning(config.permissions.sandbox_policy.get())
     else {
         return;
     };
@@ -1084,14 +1083,16 @@ impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
-        cfg: crate::legacy_core::config::Config,
+        cfg: codex_core::config::Config,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        initial_collaboration_mask: Option<codex_protocol::config_types::CollaborationModeMask>,
     ) -> crate::chatwidget::ChatWidgetInit {
         crate::chatwidget::ChatWidgetInit {
             config: cfg,
             frame_requester: tui.frame_requester(),
             app_event_tx: self.app_event_tx.clone(),
-            // Fork/resume bootstraps here don't carry any prefilled message content.
-            initial_user_message: None,
+            initial_user_message,
+            initial_collaboration_mask,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
             model_catalog: self.model_catalog.clone(),
@@ -2015,12 +2016,31 @@ impl App {
         });
     }
 
+    fn parse_thread_alarm_spec(&mut self, thread_id: ThreadId, spec: String) {
+        let config = self.config.clone();
+        let target = match self.remote_app_server_url.clone() {
+            Some(websocket_url) => crate::AppServerTarget::Remote {
+                websocket_url,
+                auth_token: self.remote_app_server_auth_token.clone(),
+            },
+            None => crate::AppServerTarget::Embedded,
+        };
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = parse_alarm_spec(config, target, spec.clone()).await;
+            app_event_tx.send(AppEvent::ThreadAlarmSpecParsed {
+                thread_id,
+                spec,
+                result,
+            });
+        });
+    }
+
     fn submit_feedback(
         &mut self,
         app_server: &AppServerSession,
         category: FeedbackCategory,
         reason: Option<String>,
-        turn_id: Option<String>,
         include_logs: bool,
     ) {
         let request_handle = app_server.request_handle();
@@ -2036,7 +2056,6 @@ impl App {
             rollout_path,
             category,
             reason,
-            turn_id,
             include_logs,
         );
         tokio::spawn(async move {
@@ -3245,7 +3264,8 @@ impl App {
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
 
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        let init =
+            self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone(), None, None);
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
 
         self.reset_for_thread_switch(tui)?;
@@ -3305,14 +3325,23 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
-        session_start_source: Option<ThreadStartSource>,
+        initial_prompt: Option<String>,
+        initial_collaboration_mask: Option<codex_protocol::config_types::CollaborationModeMask>,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
         self.refresh_in_memory_config_from_disk_best_effort("starting a new thread")
             .await;
         let model = self.chat_widget.current_model().to_string();
-        let config = self.fresh_session_config();
+        let mut config = self.fresh_session_config();
+        if let Some(mask) = initial_collaboration_mask.as_ref() {
+            if let Some(mask_model) = mask.model.as_ref() {
+                config.model = Some(mask_model.clone());
+            }
+            if let Some(reasoning_effort) = mask.reasoning_effort {
+                config.model_reasoning_effort = reasoning_effort;
+            }
+        }
         let summary = session_summary(
             self.chat_widget.token_usage(),
             self.chat_widget.thread_id(),
@@ -3327,13 +3356,20 @@ impl App {
             }
         }
         self.config = config.clone();
-        match app_server
-            .start_thread_with_session_start_source(&config, session_start_source)
-            .await
-        {
+        match app_server.start_thread(&config).await {
             Ok(started) => {
                 if let Err(err) = self
-                    .replace_chat_widget_with_app_server_thread(tui, app_server, started)
+                    .replace_chat_widget_with_app_server_thread(
+                        tui,
+                        app_server,
+                        started,
+                        crate::chatwidget::create_initial_user_message(
+                            initial_prompt,
+                            Vec::new(),
+                            Vec::new(),
+                        ),
+                        initial_collaboration_mask,
+                    )
                     .await
                 {
                     self.chat_widget.add_error_message(format!(
@@ -3366,9 +3402,16 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         started: AppServerStartedThread,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        initial_collaboration_mask: Option<codex_protocol::config_types::CollaborationModeMask>,
     ) -> Result<()> {
         self.reset_thread_event_state();
-        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(
+            tui,
+            self.config.clone(),
+            initial_user_message,
+            initial_collaboration_mask,
+        );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.enqueue_primary_thread_session(started.session, started.turns)
             .await?;
@@ -3700,6 +3743,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    initial_collaboration_mask: None,
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
@@ -3734,6 +3778,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    initial_collaboration_mask: None,
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
@@ -3773,6 +3818,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    initial_collaboration_mask: None,
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     model_catalog: model_catalog.clone(),
@@ -3940,15 +3986,10 @@ impl App {
                         }
                         AppRunControl::Continue
                     }
-                    event = tui_events.next() => {
-                        if let Some(event) = event {
-                            match app.handle_tui_event(tui, &mut app_server, event).await {
-                                Ok(control) => control,
-                                Err(err) => break Err(err),
-                            }
-                        } else {
-                            tracing::warn!("terminal input stream closed; shutting down active thread");
-                            app.handle_exit_mode(&mut app_server, ExitMode::ShutdownFirst).await
+                    Some(event) = tui_events.next() => {
+                        match app.handle_tui_event(tui, &mut app_server, event).await {
+                            Ok(control) => control,
+                            Err(err) => break Err(err),
                         }
                     }
                     app_server_event = app_server.next_event(), if listen_for_app_server_events => {
@@ -4061,108 +4102,6 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
-    async fn resume_target_session(
-        &mut self,
-        tui: &mut tui::Tui,
-        app_server: &mut AppServerSession,
-        target_session: SessionTarget,
-    ) -> Result<AppRunControl> {
-        if self.ignore_same_thread_resume(&target_session) {
-            tui.frame_requester().schedule_frame();
-            return Ok(AppRunControl::Continue);
-        }
-
-        let current_cwd = self.config.cwd.to_path_buf();
-        let resume_cwd = if self.remote_app_server_url.is_some() {
-            current_cwd.clone()
-        } else {
-            match crate::resolve_cwd_for_resume_or_fork(
-                tui,
-                &self.config,
-                &current_cwd,
-                target_session.thread_id,
-                target_session.path.as_deref(),
-                CwdPromptAction::Resume,
-                /*allow_prompt*/ true,
-            )
-            .await?
-            {
-                crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
-                crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
-                crate::ResolveCwdOutcome::Exit => {
-                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
-                }
-            }
-        };
-
-        let mut resume_config = match self
-            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
-            .await
-        {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                self.chat_widget.add_error_message(format!(
-                    "Failed to rebuild configuration for resume: {err}"
-                ));
-                return Ok(AppRunControl::Continue);
-            }
-        };
-        self.apply_runtime_policy_overrides(&mut resume_config);
-
-        let summary = session_summary(
-            self.chat_widget.token_usage(),
-            self.chat_widget.thread_id(),
-            self.chat_widget.thread_name(),
-        );
-        match app_server
-            .resume_thread(resume_config.clone(), target_session.thread_id)
-            .await
-        {
-            Ok(resumed) => {
-                self.shutdown_current_thread(app_server).await;
-                self.config = resume_config;
-                tui.set_notification_settings(
-                    self.config.tui_notifications.method,
-                    self.config.tui_notifications.condition,
-                );
-                self.file_search
-                    .update_search_dir(self.config.cwd.to_path_buf());
-                match self
-                    .replace_chat_widget_with_app_server_thread(tui, app_server, resumed)
-                    .await
-                {
-                    Ok(()) => {
-                        if let Some(summary) = summary {
-                            let mut lines: Vec<Line<'static>> = Vec::new();
-                            if let Some(usage_line) = summary.usage_line {
-                                lines.push(usage_line.into());
-                            }
-                            if let Some(command) = summary.resume_command {
-                                let spans =
-                                    vec!["To continue this session, run ".into(), command.cyan()];
-                                lines.push(spans.into());
-                            }
-                            self.chat_widget.add_plain_history_lines(lines);
-                        }
-                    }
-                    Err(err) => {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to attach to resumed app-server thread: {err}"
-                        ));
-                    }
-                }
-            }
-            Err(err) => {
-                let path_display = target_session.display_label();
-                self.chat_widget.add_error_message(format!(
-                    "Failed to resume session from {path_display}: {err}"
-                ));
-            }
-        }
-
-        Ok(AppRunControl::Continue)
-    }
-
     async fn handle_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -4171,19 +4110,31 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
-                self.start_fresh_session_with_summary_hint(
-                    tui, app_server, /*session_start_source*/ None,
-                )
-                .await;
+                self.start_fresh_session_with_summary_hint(tui, app_server, None, None)
+                    .await;
             }
             AppEvent::ClearUi => {
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
+                self.start_fresh_session_with_summary_hint(tui, app_server, None, None)
+                    .await;
+            }
+            AppEvent::ImplementPlanInFreshSession {
+                plan_path,
+                collaboration_mode,
+            } => {
+                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+                self.reset_app_ui_state_after_clear();
+                let plan_path = plan_path.display();
+                let prompt = format!(
+                    "Read the plan from {plan_path} and implement it. This is a fresh session, so use that file as the source of truth."
+                );
                 self.start_fresh_session_with_summary_hint(
                     tui,
                     app_server,
-                    Some(ThreadStartSource::Clear),
+                    Some(prompt),
+                    Some(collaboration_mode),
                 )
                 .await;
             }
@@ -4219,13 +4170,97 @@ impl App {
                 .await?
                 {
                     SessionSelection::Resume(target_session) => {
-                        match self
-                            .resume_target_session(tui, app_server, target_session)
+                        if self.ignore_same_thread_resume(&target_session) {
+                            tui.frame_requester().schedule_frame();
+                            return Ok(AppRunControl::Continue);
+                        }
+                        let current_cwd = self.config.cwd.to_path_buf();
+                        let resume_cwd = if self.remote_app_server_url.is_some() {
+                            current_cwd.clone()
+                        } else {
+                            match crate::resolve_cwd_for_resume_or_fork(
+                                tui,
+                                &self.config,
+                                &current_cwd,
+                                target_session.thread_id,
+                                target_session.path.as_deref(),
+                                CwdPromptAction::Resume,
+                                /*allow_prompt*/ true,
+                            )
                             .await?
+                            {
+                                crate::ResolveCwdOutcome::Continue(Some(cwd)) => cwd,
+                                crate::ResolveCwdOutcome::Continue(None) => current_cwd.clone(),
+                                crate::ResolveCwdOutcome::Exit => {
+                                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                                }
+                            }
+                        };
+                        let mut resume_config = match self
+                            .rebuild_config_for_resume_or_fallback(&current_cwd, resume_cwd)
+                            .await
                         {
-                            AppRunControl::Continue => {}
-                            AppRunControl::Exit(reason) => {
-                                return Ok(AppRunControl::Exit(reason));
+                            Ok(cfg) => cfg,
+                            Err(err) => {
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to rebuild configuration for resume: {err}"
+                                ));
+                                return Ok(AppRunControl::Continue);
+                            }
+                        };
+                        self.apply_runtime_policy_overrides(&mut resume_config);
+                        let summary = session_summary(
+                            self.chat_widget.token_usage(),
+                            self.chat_widget.thread_id(),
+                            self.chat_widget.thread_name(),
+                        );
+                        match app_server
+                            .resume_thread(resume_config.clone(), target_session.thread_id)
+                            .await
+                        {
+                            Ok(resumed) => {
+                                self.shutdown_current_thread(app_server).await;
+                                self.config = resume_config;
+                                tui.set_notification_settings(
+                                    self.config.tui_notifications.method,
+                                    self.config.tui_notifications.condition,
+                                );
+                                self.file_search
+                                    .update_search_dir(self.config.cwd.to_path_buf());
+                                match self
+                                    .replace_chat_widget_with_app_server_thread(
+                                        tui, app_server, resumed, None, None,
+                                    )
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        if let Some(summary) = summary {
+                                            let mut lines: Vec<Line<'static>> = Vec::new();
+                                            if let Some(usage_line) = summary.usage_line {
+                                                lines.push(usage_line.into());
+                                            }
+                                            if let Some(command) = summary.resume_command {
+                                                let spans = vec![
+                                                    "To continue this session, run ".into(),
+                                                    command.cyan(),
+                                                ];
+                                                lines.push(spans.into());
+                                            }
+                                            self.chat_widget.add_plain_history_lines(lines);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        self.chat_widget.add_error_message(format!(
+                                            "Failed to attach to resumed app-server thread: {err}"
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                let path_display = target_session.display_label();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to resume session from {path_display}: {err}"
+                                ));
                             }
                         }
                     }
@@ -4236,26 +4271,6 @@ impl App {
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
-            }
-            AppEvent::ResumeSessionByIdOrName(id_or_name) => {
-                match crate::lookup_session_target_with_app_server(
-                    app_server,
-                    self.config.codex_home.as_path(),
-                    &id_or_name,
-                )
-                .await?
-                {
-                    Some(target_session) => {
-                        return self
-                            .resume_target_session(tui, app_server, target_session)
-                            .await;
-                    }
-                    None => {
-                        self.chat_widget.add_error_message(format!(
-                            "No saved chat found matching '{id_or_name}'."
-                        ));
-                    }
-                }
             }
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
@@ -4277,7 +4292,9 @@ impl App {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self
-                                .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
+                                .replace_chat_widget_with_app_server_thread(
+                                    tui, app_server, forked, None, None,
+                                )
                                 .await
                             {
                                 Ok(()) => {
@@ -4317,6 +4334,84 @@ impl App {
                 }
 
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::OpenThreadAlarms { thread_id } => {
+                match app_server.thread_alarm_list(thread_id).await {
+                    Ok(alarms) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget.open_thread_alarms_popup(thread_id, alarms);
+                        }
+                    }
+                    Err(err) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to load thread alarms: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::CreateThreadAlarmFromSpec { thread_id, spec } => {
+                self.parse_thread_alarm_spec(thread_id, spec);
+            }
+            AppEvent::ThreadAlarmSpecParsed {
+                thread_id,
+                spec,
+                result,
+            } => match result {
+                Ok(parsed) => match app_server
+                    .thread_alarm_create(
+                        thread_id,
+                        parsed.trigger.clone(),
+                        parsed.prompt.clone(),
+                        parsed.delivery,
+                    )
+                    .await
+                {
+                    Ok(alarm) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            let summary =
+                                format_alarm_summary(&alarm.trigger, alarm.delivery, &alarm.prompt);
+                            self.chat_widget.add_info_message(
+                                format!("Created thread alarm from `/loop {spec}`."),
+                                Some(summary),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to create thread alarm: {err}"));
+                        }
+                    }
+                },
+                Err(err) => {
+                    if self.chat_widget.thread_id() == Some(thread_id) {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to parse `/loop {spec}`: {err}"));
+                    }
+                }
+            },
+            AppEvent::DeleteThreadAlarm { thread_id, id } => {
+                match app_server.thread_alarm_delete(thread_id, id.clone()).await {
+                    Ok(true) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_info_message(format!("Deleted thread alarm `{id}`."), None);
+                        }
+                    }
+                    Ok(false) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Thread alarm `{id}` was not found."));
+                        }
+                    }
+                    Err(err) => {
+                        if self.chat_widget.thread_id() == Some(thread_id) {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to delete thread alarm: {err}"));
+                        }
+                    }
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -4637,10 +4732,9 @@ impl App {
             AppEvent::SubmitFeedback {
                 category,
                 reason,
-                turn_id,
                 include_logs,
             } => {
-                self.submit_feedback(app_server, category, reason, turn_id, include_logs);
+                self.submit_feedback(app_server, category, reason, include_logs);
             }
             AppEvent::FeedbackSubmitted {
                 origin_thread_id,
@@ -4689,9 +4783,8 @@ impl App {
 
                     // If the elevated setup already ran on this machine, don't prompt for
                     // elevation again - just flip the config to use the elevated path.
-                    if crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
-                        codex_home.as_path(),
-                    ) {
+                    if codex_core::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
+                    {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
@@ -4703,7 +4796,7 @@ impl App {
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let session_telemetry = self.session_telemetry.clone();
                     tokio::task::spawn_blocking(move || {
-                        let result = crate::legacy_core::windows_sandbox::run_elevated_setup(
+                        let result = codex_core::windows_sandbox::run_elevated_setup(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -4726,7 +4819,7 @@ impl App {
                                 let mut code_tag: Option<String> = None;
                                 let mut message_tag: Option<String> = None;
                                 if let Some((code, message)) =
-                                    crate::legacy_core::windows_sandbox::elevated_setup_failure_details(
+                                    codex_core::windows_sandbox::elevated_setup_failure_details(
                                         &err,
                                     )
                                 {
@@ -4741,7 +4834,7 @@ impl App {
                                     tags.push(("message", message));
                                 }
                                 session_telemetry.counter(
-                                    crate::legacy_core::windows_sandbox::elevated_setup_failure_metric_name(
+                                    codex_core::windows_sandbox::elevated_setup_failure_metric_name(
                                         &err,
                                     ),
                                     /*inc*/ 1,
@@ -4776,15 +4869,13 @@ impl App {
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
-                        if let Err(err) =
-                            crate::legacy_core::windows_sandbox::run_legacy_setup_preflight(
-                                &policy,
-                                policy_cwd.as_path(),
-                                command_cwd.as_path(),
-                                &env_map,
-                                codex_home.as_path(),
-                            )
-                        {
+                        if let Err(err) = codex_core::windows_sandbox::run_legacy_setup_preflight(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                        ) {
                             session_telemetry.counter(
                                 "codex.windows_sandbox.legacy_setup_preflight_failed",
                                 /*inc*/ 1,
@@ -4825,7 +4916,7 @@ impl App {
 
                     tokio::task::spawn_blocking(move || {
                         let requested_path = PathBuf::from(path);
-                        let event = match crate::legacy_core::grant_read_root_non_elevated(
+                        let event = match codex_core::grant_read_root_non_elevated(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -5500,6 +5591,32 @@ impl App {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
             }
+            AppEvent::StartPlanOnlyCompactAndImplement {
+                plan_text,
+                collaboration_mode,
+            } => {
+                let Some(thread_id) = self.active_thread_id else {
+                    self.chat_widget
+                        .add_error_message("No active thread is available.".to_string());
+                    return Ok(AppRunControl::Continue);
+                };
+                self.chat_widget
+                    .set_pending_post_compact_implementation(collaboration_mode);
+                if let Err(err) = app_server
+                    .thread_compact_start_with_strategy(
+                        thread_id,
+                        Some(
+                            codex_app_server_protocol::ThreadCompactStrategy::PlanOnlyHandoff {
+                                plan_text,
+                            },
+                        ),
+                    )
+                    .await
+                {
+                    self.chat_widget.clear_pending_post_compact_implementation();
+                    return Err(err);
+                }
+            }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();
             }
@@ -5577,7 +5694,7 @@ impl App {
             }
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-                let edit = crate::legacy_core::config::edit::status_line_items_edit(&ids);
+                let edit = codex_core::config::edit::status_line_items_edit(&ids);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([edit])
                     .apply()
@@ -5603,7 +5720,7 @@ impl App {
             }
             AppEvent::TerminalTitleSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
-                let edit = crate::legacy_core::config::edit::terminal_title_items_edit(&ids);
+                let edit = codex_core::config::edit::terminal_title_items_edit(&ids);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([edit])
                     .apply()
@@ -5629,7 +5746,7 @@ impl App {
                 self.chat_widget.cancel_terminal_title_setup();
             }
             AppEvent::SyntaxThemeSelected { name } => {
-                let edit = crate::legacy_core::config::edit::syntax_theme_edit(&name);
+                let edit = codex_core::config::edit::syntax_theme_edit(&name);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([edit])
                     .apply()
@@ -5724,6 +5841,7 @@ impl App {
             }
         }
         self.handle_backtrack_rollback_succeeded(num_turns);
+        self.chat_widget.handle_thread_rolled_back();
     }
 
     fn handle_thread_event_now(&mut self, event: ThreadBufferedEvent) {
@@ -6257,7 +6375,6 @@ fn build_feedback_upload_params(
     rollout_path: Option<PathBuf>,
     category: FeedbackCategory,
     reason: Option<String>,
-    turn_id: Option<String>,
     include_logs: bool,
 ) -> FeedbackUploadParams {
     let extra_log_files = if include_logs {
@@ -6265,14 +6382,12 @@ fn build_feedback_upload_params(
     } else {
         None
     };
-    let tags = turn_id.map(|turn_id| BTreeMap::from([(String::from("turn_id"), turn_id)]));
     FeedbackUploadParams {
         classification: crate::bottom_pane::feedback_classification(category).to_string(),
         reason,
         thread_id: origin_thread_id.map(|thread_id| thread_id.to_string()),
         include_logs,
         extra_log_files,
-        tags,
     }
 }
 
@@ -6355,8 +6470,6 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
-    use crate::legacy_core::config::ConfigBuilder;
-    use crate::legacy_core::config::ConfigOverrides;
     use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
@@ -6397,6 +6510,8 @@ mod tests {
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
     use codex_config::types::ModelAvailabilityNuxConfig;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
@@ -6726,7 +6841,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let initial_prompt = "follow-up after replay".to_string();
         let config = app.config.clone();
-        let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
             config,
             frame_requester: crate::tui::FrameRequester::test_dummy(),
@@ -6736,6 +6851,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ),
+            initial_collaboration_mask: None,
             enhanced_keys_supported: false,
             has_chatgpt_account: false,
             model_catalog: app.model_catalog.clone(),
@@ -9247,7 +9363,7 @@ guardian_approval = true
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-        let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
         App {
@@ -9301,7 +9417,7 @@ guardian_approval = true
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
         let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-        let model = crate::legacy_core::test_support::get_model_offline(config.model.as_deref());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
         (
@@ -9655,21 +9771,12 @@ guardian_approval = true
             Some(rollout_path.clone()),
             FeedbackCategory::SafetyCheck,
             Some("needs follow-up".to_string()),
-            Some("turn-123".to_string()),
             /*include_logs*/ true,
         );
 
         assert_eq!(params.classification, "safety_check");
         assert_eq!(params.reason, Some("needs follow-up".to_string()));
         assert_eq!(params.thread_id, Some(thread_id.to_string()));
-        assert_eq!(
-            params
-                .tags
-                .as_ref()
-                .and_then(|tags| tags.get("turn_id"))
-                .map(String::as_str),
-            Some("turn-123")
-        );
         assert_eq!(params.include_logs, true);
         assert_eq!(params.extra_log_files, Some(vec![rollout_path]));
     }
@@ -9681,14 +9788,12 @@ guardian_approval = true
             Some(PathBuf::from("/tmp/rollout.jsonl")),
             FeedbackCategory::GoodResult,
             /*reason*/ None,
-            /*turn_id*/ None,
             /*include_logs*/ false,
         );
 
         assert_eq!(params.classification, "good_result");
         assert_eq!(params.reason, None);
         assert_eq!(params.thread_id, None);
-        assert_eq!(params.tags, None);
         assert_eq!(params.include_logs, false);
         assert_eq!(params.extra_log_files, None);
     }
@@ -9807,8 +9912,7 @@ guardian_approval = true
     }
 
     fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-        let model_info =
-            crate::legacy_core::test_support::construct_model_info_offline(model, config);
+        let model_info = codex_core::test_support::construct_model_info_offline(model, config);
         SessionTelemetry::new(
             ThreadId::new(),
             model,
@@ -9837,7 +9941,7 @@ guardian_approval = true
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        crate::legacy_core::test_support::all_model_presets().clone()
+        codex_core::test_support::all_model_presets().clone()
     }
 
     fn model_availability_nux_config(shown_count: &[(&str, u32)]) -> ModelAvailabilityNuxConfig {
@@ -10712,6 +10816,7 @@ guardian_approval = true
             frame_requester: crate::tui::FrameRequester::test_dummy(),
             app_event_tx: app.app_event_tx.clone(),
             initial_user_message: None,
+            initial_collaboration_mask: None,
             enhanced_keys_supported: app.enhanced_keys_supported,
             has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
             model_catalog: app.model_catalog.clone(),

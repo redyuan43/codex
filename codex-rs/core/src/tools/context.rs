@@ -13,7 +13,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
-use codex_tools::ToolName;
 use codex_tools::ToolSearchOutputTool;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
@@ -40,7 +39,8 @@ pub struct ToolInvocation {
     pub turn: Arc<TurnContext>,
     pub tracker: SharedTurnDiffTracker,
     pub call_id: String,
-    pub tool_name: ToolName,
+    pub tool_name: String,
+    pub tool_namespace: Option<String>,
     pub payload: ToolPayload,
 }
 

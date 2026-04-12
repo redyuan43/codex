@@ -219,6 +219,61 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
     let compact_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: thread_id.clone(),
+            strategy: None,
+        })
+        .await?;
+    let compact_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(compact_id)),
+    )
+    .await??;
+    let _compact: ThreadCompactStartResponse =
+        to_response::<ThreadCompactStartResponse>(compact_resp)?;
+
+    let started = wait_for_context_compaction_started(&mut mcp).await?;
+    let completed = wait_for_context_compaction_completed(&mut mcp).await?;
+
+    let ThreadItem::ContextCompaction { id: started_id } = started.item else {
+        unreachable!("started item should be context compaction");
+    };
+    let ThreadItem::ContextCompaction { id: completed_id } = completed.item else {
+        unreachable!("completed item should be context compaction");
+    };
+
+    assert_eq!(started.thread_id, thread_id);
+    assert_eq!(completed.thread_id, thread_id);
+    assert_eq!(started_id, completed_id);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_compact_start_plan_only_handoff_triggers_compaction() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = responses::start_mock_server().await;
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        &BTreeMap::default(),
+        AUTO_COMPACT_LIMIT,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        COMPACT_PROMPT,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_id = start_thread(&mut mcp).await?;
+    let compact_id = mcp
+        .send_thread_compact_start_request(ThreadCompactStartParams {
+            thread_id: thread_id.clone(),
+            strategy: Some(
+                codex_app_server_protocol::ThreadCompactStrategy::PlanOnlyHandoff {
+                    plan_text: "## Plan\n\n1. Keep only this summary\n2. Then implement"
+                        .to_string(),
+                },
+            ),
         })
         .await?;
     let compact_resp: JSONRPCResponse = timeout(
@@ -268,6 +323,7 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: "not-a-thread-id".to_string(),
+            strategy: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
@@ -304,6 +360,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
     let request_id = mcp
         .send_thread_compact_start_request(ThreadCompactStartParams {
             thread_id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+            strategy: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

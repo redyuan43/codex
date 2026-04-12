@@ -225,7 +225,8 @@ async fn shell_pre_tool_use_payload_uses_joined_command() {
             turn: turn.into(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-41".to_string(),
-            tool_name: codex_tools::ToolName::plain("shell"),
+            tool_name: "shell".to_string(),
+            tool_namespace: None,
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
@@ -250,7 +251,8 @@ async fn shell_command_pre_tool_use_payload_uses_raw_command() {
             turn: turn.into(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-42".to_string(),
-            tool_name: codex_tools::ToolName::plain("shell_command"),
+            tool_name: "shell_command".to_string(),
+            tool_namespace: None,
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {

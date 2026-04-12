@@ -113,6 +113,14 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Loop => {
+                let Some(thread_id) = self.thread_id else {
+                    self.add_error_message("No active thread is available.".to_string());
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::OpenThreadAlarms { thread_id });
+            }
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
@@ -473,6 +481,23 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Loop if !trimmed.is_empty() => {
+                let Some(thread_id) = self.thread_id else {
+                    self.add_error_message("No active thread is available.".to_string());
+                    return;
+                };
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::CreateThreadAlarmFromSpec {
+                    thread_id,
+                    spec: prepared_args,
+                });
+                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self

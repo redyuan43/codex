@@ -277,9 +277,7 @@ impl ApprovalOverlay {
         };
         let granted_permissions = match decision {
             ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
-            ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
-                Default::default()
-            }
+            ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
@@ -722,7 +720,6 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('d'))],
             }),
-            ReviewDecision::TimedOut => None,
             ReviewDecision::Abort => Some(ApprovalOption {
                 label: "No, and tell Codex what to do differently".to_string(),
                 decision: ApprovalDecision::Review(ReviewDecision::Abort),

@@ -16,6 +16,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -144,7 +145,8 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "test-call".to_string(),
-            tool_name: codex_tools::ToolName::plain("shell"),
+            tool_name: "shell".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -210,7 +212,8 @@ async fn guardian_allows_unified_exec_additional_permissions_requests_past_polic
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
-            tool_name: codex_tools::ToolName::plain("exec_command"),
+            tool_name: "exec_command".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
@@ -323,7 +326,8 @@ async fn shell_handler_allows_sticky_turn_permissions_without_inline_request_per
             turn: Arc::clone(&turn_context),
             tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
             call_id: "sticky-turn-grant".to_string(),
-            tool_name: codex_tools::ToolName::plain("shell"),
+            tool_name: "shell".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": [
@@ -433,7 +437,6 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
         auth_manager,
-        analytics_events_client: None,
         models_manager,
         environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         skills_manager,

@@ -5,6 +5,70 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AlarmDelivery": {
+      "enum": [
+        "afterTurn",
+        "steerCurrentTurn"
+      ],
+      "type": "string"
+    },
+    "AlarmTrigger": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "delay"
+              ],
+              "type": "string"
+            },
+            "repeat": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "seconds": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "seconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "dtstart": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "schedule"
+              ],
+              "type": "string"
+            },
+            "rrule": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "KindAlarmTrigger",
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalsReviewer": {
       "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
       "enum": [
@@ -647,15 +711,6 @@
             "null"
           ]
         },
-        "tags": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": [
-            "object",
-            "null"
-          ]
-        },
         "threadId": {
           "type": [
             "string",
@@ -1285,27 +1340,6 @@
         "toolsAndAuthOnly"
       ],
       "type": "string"
-    },
-    "McpServerToolCallParams": {
-      "properties": {
-        "_meta": true,
-        "arguments": true,
-        "server": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "tool": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "server",
-        "threadId",
-        "tool"
-      ],
-      "type": "object"
     },
     "MergeStrategy": {
       "enum": [
@@ -2605,6 +2639,16 @@
     },
     "ThreadCompactStartParams": {
       "properties": {
+        "strategy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadCompactStrategy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threadId": {
           "type": "string"
         }
@@ -2613,6 +2657,30 @@
         "threadId"
       ],
       "type": "object"
+    },
+    "ThreadCompactStrategy": {
+      "oneOf": [
+        {
+          "properties": {
+            "planText": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "planOnlyHandoff"
+              ],
+              "title": "PlanOnlyHandoffThreadCompactStrategyType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "planText",
+            "type"
+          ],
+          "title": "PlanOnlyHandoffThreadCompactStrategy",
+          "type": "object"
+        }
+      ]
     },
     "ThreadForkParams": {
       "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
@@ -3240,26 +3308,9 @@
               "type": "null"
             }
           ]
-        },
-        "sessionStartSource": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ThreadStartSource"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "type": "object"
-    },
-    "ThreadStartSource": {
-      "enum": [
-        "startup",
-        "clear"
-      ],
-      "type": "string"
     },
     "ThreadUnarchiveParams": {
       "properties": {
@@ -4597,30 +4648,6 @@
         "params"
       ],
       "title": "McpServer/resource/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "mcpServer/tool/call"
-          ],
-          "title": "McpServer/tool/callRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/McpServerToolCallParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "McpServer/tool/callRequest",
       "type": "object"
     },
     {

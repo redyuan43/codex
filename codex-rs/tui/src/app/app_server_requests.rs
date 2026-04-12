@@ -258,7 +258,6 @@ fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalD
         ReviewDecision::Approved => Ok(FileChangeApprovalDecision::Accept),
         ReviewDecision::ApprovedForSession => Ok(FileChangeApprovalDecision::AcceptForSession),
         ReviewDecision::Denied => Ok(FileChangeApprovalDecision::Decline),
-        ReviewDecision::TimedOut => Ok(FileChangeApprovalDecision::Decline),
         ReviewDecision::Abort => Ok(FileChangeApprovalDecision::Cancel),
         ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
             Err("execpolicy amendment is not a valid file change approval decision".to_string())

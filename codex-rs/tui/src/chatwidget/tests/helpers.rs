@@ -109,7 +109,7 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
 }
 
 pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info = crate::legacy_core::test_support::construct_model_info_offline(model, config);
+    let model_info = codex_core::test_support::construct_model_info_offline(model, config);
     SessionTelemetry::new(
         ThreadId::new(),
         model,
@@ -131,7 +131,7 @@ pub(super) fn test_model_catalog(config: &Config) -> Arc<ModelCatalog> {
             .enabled(Feature::DefaultModeRequestUserInput),
     };
     Arc::new(ModelCatalog::new(
-        crate::legacy_core::test_support::all_model_presets().clone(),
+        codex_core::test_support::all_model_presets().clone(),
         collaboration_modes_config,
     ))
 }
@@ -148,9 +148,9 @@ pub(super) async fn make_chatwidget_manual(
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let mut cfg = test_config().await;
-    let resolved_model = model_override.map(str::to_owned).unwrap_or_else(|| {
-        crate::legacy_core::test_support::get_model_offline(cfg.model.as_deref())
-    });
+    let resolved_model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| codex_core::test_support::get_model_offline(cfg.model.as_deref()));
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
@@ -204,11 +204,10 @@ pub(super) async fn make_chatwidget_manual(
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
         stream_controller: None,
         plan_stream_controller: None,
-        clipboard_lease: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
-        last_agent_markdown: None,
-        saw_copy_source_this_turn: false,
+        last_copyable_output: None,
+        pending_turn_copyable_output: None,
         running_commands: HashMap::new(),
         collab_agent_metadata: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
@@ -242,14 +241,13 @@ pub(super) async fn make_chatwidget_manual(
         session_context_anchor: None,
         live_stage_summary: None,
         recent_progress_summary: None,
-        active_hook_cell: None,
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
         thread_id: None,
-        last_turn_id: None,
         thread_name: None,
         forked_from: None,
+        thread_alarms: Vec::new(),
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         startup_tooltip_override: None,
@@ -269,6 +267,9 @@ pub(super) async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        latest_completed_plan_text: None,
+        pending_post_compact_implementation: None,
+        completed_context_compaction_this_turn: false,
         last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
@@ -278,6 +279,8 @@ pub(super) async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         current_cwd: None,
+        persisted_plan_path: None,
+        persisted_plan_error: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -670,35 +673,6 @@ pub(super) fn active_blob(chat: &ChatWidget) -> String {
     lines_to_single_string(&lines)
 }
 
-pub(super) fn active_hook_blob(chat: &ChatWidget) -> String {
-    let Some(cell) = chat.active_hook_cell.as_ref() else {
-        return "<empty>\n".to_string();
-    };
-    let lines = cell.display_lines(/*width*/ 80);
-    lines_to_single_string(&lines)
-}
-
-pub(super) fn expire_quiet_hook_linger(chat: &mut ChatWidget) {
-    if let Some(cell) = chat.active_hook_cell.as_mut() {
-        cell.expire_quiet_runs_now_for_test();
-    }
-    chat.pre_draw_tick();
-}
-
-pub(super) fn reveal_running_hooks(chat: &mut ChatWidget) {
-    if let Some(cell) = chat.active_hook_cell.as_mut() {
-        cell.reveal_running_runs_now_for_test();
-    }
-    chat.pre_draw_tick();
-}
-
-pub(super) fn reveal_running_hooks_after_delayed_redraw(chat: &mut ChatWidget) {
-    if let Some(cell) = chat.active_hook_cell.as_mut() {
-        cell.reveal_running_runs_after_delayed_redraw_for_test();
-    }
-    chat.pre_draw_tick();
-}
-
 pub(super) fn get_available_model(chat: &ChatWidget, model: &str) -> ModelPreset {
     let models = chat
         .model_catalog
@@ -1012,18 +986,6 @@ pub(super) async fn assert_hook_events_snapshot(
             },
         }),
     });
-    assert!(
-        drain_insert_history(&mut rx).is_empty(),
-        "hook start should update the live hook cell instead of writing history"
-    );
-    reveal_running_hooks(&mut chat);
-    assert!(
-        active_hook_blob(&chat).contains(&format!(
-            "Running {} hook: {status_message}",
-            hook_event_label(event_name)
-        )),
-        "hook start should render in the live hook cell"
-    );
 
     chat.handle_codex_event(Event {
         id: "hook-1".into(),
@@ -1062,14 +1024,4 @@ pub(super) async fn assert_hook_events_snapshot(
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
     assert_chatwidget_snapshot!(snapshot_name, combined);
-}
-
-fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
-    match event_name {
-        codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
-        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
-        codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
-        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
-        codex_protocol::protocol::HookEventName::Stop => "Stop",
-    }
 }
