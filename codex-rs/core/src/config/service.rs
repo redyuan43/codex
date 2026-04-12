@@ -629,7 +629,14 @@ fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
 }
 
 fn paths_match(expected: impl AsRef<Path>, provided: impl AsRef<Path>) -> bool {
-    path_utils::paths_match_after_normalization(expected, provided)
+    if let (Ok(expanded_expected), Ok(expanded_provided)) = (
+        path_utils::normalize_for_path_comparison(&expected),
+        path_utils::normalize_for_path_comparison(&provided),
+    ) {
+        expanded_expected == expanded_provided
+    } else {
+        expected.as_ref() == provided.as_ref()
+    }
 }
 
 fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a TomlValue> {

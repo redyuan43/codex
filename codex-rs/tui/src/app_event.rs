@@ -26,7 +26,6 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
-use crate::alarm_scheduler::ParsedAlarmSpec;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -125,35 +124,8 @@ pub(crate) enum AppEvent {
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
-    /// Resume a thread by UUID or thread name inside the running TUI session.
-    ResumeSessionByIdOrName(String),
-
     /// Fork the current session into a new thread.
     ForkCurrentSession,
-
-    /// List alarms for the specified thread and open the management UI.
-    OpenThreadAlarms {
-        thread_id: ThreadId,
-    },
-
-    /// Parse a `/loop <spec>` input into structured alarm params.
-    CreateThreadAlarmFromSpec {
-        thread_id: ThreadId,
-        spec: String,
-    },
-
-    /// Result of parsing a `/loop <spec>` input.
-    ThreadAlarmSpecParsed {
-        thread_id: ThreadId,
-        spec: String,
-        result: Result<ParsedAlarmSpec, String>,
-    },
-
-    /// Delete one alarm from the specified thread.
-    DeleteThreadAlarm {
-        thread_id: ThreadId,
-        id: String,
-    },
 
     /// Request to exit the application.
     ///
@@ -566,6 +538,18 @@ pub(crate) enum AppEvent {
         collaboration_mode: CollaborationModeMask,
     },
 
+    /// Clear the UI, start a fresh session, and implement from a persisted plan file.
+    ImplementPlanInFreshSession {
+        plan_path: PathBuf,
+        collaboration_mode: CollaborationModeMask,
+    },
+
+    /// Compact the active thread to the latest completed plan, then auto-execute it.
+    StartPlanOnlyCompactAndImplement {
+        plan_text: String,
+        collaboration_mode: CollaborationModeMask,
+    },
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 
@@ -584,7 +568,6 @@ pub(crate) enum AppEvent {
     SubmitFeedback {
         category: FeedbackCategory,
         reason: Option<String>,
-        turn_id: Option<String>,
         include_logs: bool,
     },
 

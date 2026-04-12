@@ -46,11 +46,11 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
-use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
 pub(crate) use compact::CompactTask;
+pub(crate) use compact::PlanOnlyHandoffCompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
@@ -236,7 +236,7 @@ impl Session {
         self.start_task(turn_context, input, task).await;
     }
 
-    pub(crate) async fn start_task<T: SessionTask>(
+    async fn start_task<T: SessionTask>(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
@@ -303,18 +303,7 @@ impl Session {
                     )
                     .await;
                 let sess = session_ctx.clone_session();
-                if let Err(err) = sess.flush_rollout().await {
-                    warn!("failed to flush rollout before completing turn: {err}");
-                    sess.send_event(
-                        ctx_for_finish.as_ref(),
-                        EventMsg::Warning(WarningEvent {
-                            message: format!(
-                                "Failed to save the conversation transcript; Codex will continue retrying. Error: {err}"
-                            ),
-                        }),
-                    )
-                    .await;
-                }
+                sess.flush_rollout().await;
                 if !task_cancellation_token.is_cancelled() {
                     // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
                     sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
@@ -534,15 +523,15 @@ impl Session {
             duration_ms,
         });
         self.send_event(turn_context.as_ref(), event).await;
-        let session = Arc::clone(self);
-        let _scheduler = tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                session.maybe_start_pending_alarm().await;
-                if should_clear_active_turn {
+
+        if should_clear_active_turn {
+            let session = Arc::clone(self);
+            let _scheduler = tokio::task::spawn_blocking(move || {
+                tokio::runtime::Handle::current().block_on(async move {
                     session.maybe_start_turn_for_pending_work().await;
-                }
+                });
             });
-        });
+        }
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
@@ -603,9 +592,7 @@ impl Session {
                 .await;
             // Ensure the marker is durably visible before emitting TurnAborted: some clients
             // synchronously re-read the rollout on receipt of the abort event.
-            if let Err(err) = self.flush_rollout().await {
-                warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
-            }
+            self.flush_rollout().await;
         }
 
         let (completed_at, duration_ms) = task

@@ -90,70 +90,6 @@
     "AgentPath": {
       "type": "string"
     },
-    "AlarmDelivery": {
-      "enum": [
-        "after-turn",
-        "steer-current-turn"
-      ],
-      "type": "string"
-    },
-    "AlarmTrigger": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "delay"
-              ],
-              "type": "string"
-            },
-            "repeat": {
-              "type": [
-                "boolean",
-                "null"
-              ]
-            },
-            "seconds": {
-              "format": "uint64",
-              "minimum": 0.0,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "kind",
-            "seconds"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "dtstart": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "kind": {
-              "enum": [
-                "schedule"
-              ],
-              "type": "string"
-            },
-            "rrule": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "KindAlarmTrigger",
-          "type": "object"
-        }
-      ]
-    },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
@@ -451,13 +387,6 @@
           "type": "string"
         }
       ]
-    },
-    "AutoReviewDecisionSource": {
-      "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
-      "enum": [
-        "agent"
-      ],
-      "type": "string"
     },
     "ByteRange": {
       "properties": {
@@ -1412,7 +1341,6 @@
         "inProgress",
         "approved",
         "denied",
-        "timedOut",
         "aborted"
       ],
       "type": "string"
@@ -1660,27 +1588,16 @@
       "type": "object"
     },
     "ItemGuardianApprovalReviewCompletedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
         },
-        "decisionSource": {
-          "$ref": "#/definitions/AutoReviewDecisionSource"
-        },
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
-        "reviewId": {
-          "description": "Stable identifier for this review.",
-          "type": "string"
-        },
         "targetItemId": {
-          "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "threadId": {
           "type": "string"
@@ -1691,16 +1608,15 @@
       },
       "required": [
         "action",
-        "decisionSource",
         "review",
-        "reviewId",
+        "targetItemId",
         "threadId",
         "turnId"
       ],
       "type": "object"
     },
     "ItemGuardianApprovalReviewStartedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
         "action": {
           "$ref": "#/definitions/GuardianApprovalReviewAction"
@@ -1708,16 +1624,8 @@
         "review": {
           "$ref": "#/definitions/GuardianApprovalReview"
         },
-        "reviewId": {
-          "description": "Stable identifier for this review.",
-          "type": "string"
-        },
         "targetItemId": {
-          "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "threadId": {
           "type": "string"
@@ -1729,7 +1637,7 @@
       "required": [
         "action",
         "review",
-        "reviewId",
+        "targetItemId",
         "threadId",
         "turnId"
       ],
@@ -2074,7 +1982,6 @@
         "go",
         "plus",
         "pro",
-        "prolite",
         "team",
         "self_serve_business_usage_based",
         "business",
@@ -2625,81 +2532,6 @@
         "waitingOnUserInput"
       ],
       "type": "string"
-    },
-    "ThreadAlarm": {
-      "properties": {
-        "createdAt": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "delivery": {
-          "$ref": "#/definitions/AlarmDelivery"
-        },
-        "id": {
-          "type": "string"
-        },
-        "lastRunAt": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "nextRunAt": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "prompt": {
-          "type": "string"
-        },
-        "trigger": {
-          "$ref": "#/definitions/AlarmTrigger"
-        }
-      },
-      "required": [
-        "createdAt",
-        "delivery",
-        "id",
-        "prompt",
-        "trigger"
-      ],
-      "type": "object"
-    },
-    "ThreadAlarmFiredNotification": {
-      "properties": {
-        "alarm": {
-          "$ref": "#/definitions/ThreadAlarm"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "alarm",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadAlarmUpdatedNotification": {
-      "properties": {
-        "alarms": {
-          "items": {
-            "$ref": "#/definitions/ThreadAlarm"
-          },
-          "type": "array"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "alarms",
-        "threadId"
-      ],
-      "type": "object"
     },
     "ThreadArchivedNotification": {
       "properties": {
@@ -4359,46 +4191,6 @@
         "params"
       ],
       "title": "Thread/name/updatedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/alarm/updated"
-          ],
-          "title": "Thread/alarm/updatedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadAlarmUpdatedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/alarm/updatedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/alarm/fired"
-          ],
-          "title": "Thread/alarm/firedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadAlarmFiredNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/alarm/firedNotification",
       "type": "object"
     },
     {

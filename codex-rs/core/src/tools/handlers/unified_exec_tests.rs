@@ -212,7 +212,8 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             turn: turn.into(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-43".to_string(),
-            tool_name: codex_tools::ToolName::plain("exec_command"),
+            tool_name: "exec_command".to_string(),
+            tool_namespace: None,
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
@@ -235,7 +236,8 @@ async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
             turn: turn.into(),
             tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
             call_id: "call-44".to_string(),
-            tool_name: codex_tools::ToolName::plain("write_stdin"),
+            tool_name: "write_stdin".to_string(),
+            tool_namespace: None,
             payload,
         }),
         None

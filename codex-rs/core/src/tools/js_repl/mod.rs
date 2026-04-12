@@ -1561,25 +1561,27 @@ impl JsReplManager {
             .await
             .list_all_tools()
             .await;
+        let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&mcp_tools);
 
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
-                deferred_mcp_tools: None,
-                mcp_tools: Some(mcp_tools),
+                mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+                tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
+                app_tools: None,
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             },
         );
 
-        let payload = if let Some(tool_info) = exec
+        let payload = if let Some((server, tool)) = exec
             .session
-            .resolve_mcp_tool_info(&req.tool_name, /*namespace*/ None)
+            .parse_mcp_tool_name(&req.tool_name, &None)
             .await
         {
             crate::tools::context::ToolPayload::Mcp {
-                server: tool_info.server_name,
-                tool: tool_info.tool.name.to_string(),
+                server,
+                tool,
                 raw_arguments: req.arguments.clone(),
             }
         } else if is_freeform_tool(&router.specs(), &req.tool_name) {
@@ -1594,7 +1596,8 @@ impl JsReplManager {
 
         let tool_name = req.tool_name.clone();
         let call = crate::tools::router::ToolCall {
-            tool_name: codex_tools::ToolName::plain(tool_name.clone()),
+            tool_name: tool_name.clone(),
+            tool_namespace: None,
             call_id: req.id.clone(),
             payload,
         };

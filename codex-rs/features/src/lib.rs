@@ -172,8 +172,6 @@ pub enum Feature {
     Personality,
     /// Enable native artifact tools.
     Artifact,
-    /// Enable per-thread persistent alarm scheduling tools and APIs.
-    AlarmScheduler,
     /// Enable Fast mode selection in the TUI and request layer.
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
@@ -188,8 +186,6 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
-    /// Use the agent identity registration flow for ChatGPT-authenticated sessions.
-    UseAgentIdentity,
 }
 
 impl Feature {
@@ -860,12 +856,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::AlarmScheduler,
-        key: "alarm_tool",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::FastMode,
         key: "fast_mode",
         stage: Stage::Stable,
@@ -917,12 +907,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::UseAgentIdentity,
-        key: "use_agent_identity",
-        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];

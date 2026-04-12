@@ -317,21 +317,6 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
-    #[experimental("thread/alarm/create")]
-    ThreadAlarmCreate => "thread/alarm/create" {
-        params: v2::ThreadAlarmCreateParams,
-        response: v2::ThreadAlarmCreateResponse,
-    },
-    #[experimental("thread/alarm/delete")]
-    ThreadAlarmDelete => "thread/alarm/delete" {
-        params: v2::ThreadAlarmDeleteParams,
-        response: v2::ThreadAlarmDeleteResponse,
-    },
-    #[experimental("thread/alarm/list")]
-    ThreadAlarmList => "thread/alarm/list" {
-        params: v2::ThreadAlarmListParams,
-        response: v2::ThreadAlarmListResponse,
-    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
@@ -403,7 +388,6 @@ client_request_definitions! {
     },
     TurnSteer => "turn/steer" {
         params: v2::TurnSteerParams,
-        inspect_params: true,
         response: v2::TurnSteerResponse,
     },
     TurnInterrupt => "turn/interrupt" {
@@ -483,11 +467,6 @@ client_request_definitions! {
     McpResourceRead => "mcpServer/resource/read" {
         params: v2::McpResourceReadParams,
         response: v2::McpResourceReadResponse,
-    },
-
-    McpServerToolCall => "mcpServer/tool/call" {
-        params: v2::McpServerToolCallParams,
-        response: v2::McpServerToolCallResponse,
     },
 
     WindowsSandboxSetupStart => "windowsSandbox/setupStart" {
@@ -984,10 +963,6 @@ server_notification_definitions! {
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
-    #[experimental("thread/alarm/updated")]
-    ThreadAlarmUpdated => "thread/alarm/updated" (v2::ThreadAlarmUpdatedNotification),
-    #[experimental("thread/alarm/fired")]
-    ThreadAlarmFired => "thread/alarm/fired" (v2::ThreadAlarmFiredNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     HookStarted => "hook/started" (v2::HookStartedNotification),

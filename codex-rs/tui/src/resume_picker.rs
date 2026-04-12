@@ -7,15 +7,6 @@ use std::sync::Arc;
 use crate::app_server_session::AppServerSession;
 use crate::diff_render::display_path_for;
 use crate::key_hint;
-use crate::legacy_core::Cursor;
-use crate::legacy_core::INTERACTIVE_SESSION_SOURCES;
-use crate::legacy_core::RolloutRecorder;
-use crate::legacy_core::ThreadItem;
-use crate::legacy_core::ThreadSortKey;
-use crate::legacy_core::ThreadsPage;
-use crate::legacy_core::config::Config;
-use crate::legacy_core::find_thread_names_by_ids;
-use crate::legacy_core::path_utils;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -26,6 +17,15 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_core::Cursor;
+use codex_core::INTERACTIVE_SESSION_SOURCES;
+use codex_core::RolloutRecorder;
+use codex_core::ThreadItem;
+use codex_core::ThreadSortKey;
+use codex_core::ThreadsPage;
+use codex_core::config::Config;
+use codex_core::find_thread_names_by_ids;
+use codex_core::path_utils;
 use codex_protocol::ThreadId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -252,7 +252,14 @@ async fn run_session_picker_with_loader(
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
     };
     let codex_home = config.codex_home.as_path();
-    let filter_cwd = picker_filter_cwd(config, show_all, is_remote);
+    let filter_cwd = if show_all || is_remote {
+        // Remote sessions live in the server's filesystem namespace, so the client
+        // process cwd is not a meaningful row filter. If the user provided an
+        // explicit remote --cd, filtering is handled server-side in thread/list.
+        None
+    } else {
+        std::env::current_dir().ok()
+    };
 
     let mut state = PickerState::new(
         codex_home.to_path_buf(),
@@ -1140,19 +1147,14 @@ fn thread_list_params(
     }
 }
 
-fn picker_filter_cwd(config: &Config, show_all: bool, is_remote: bool) -> Option<PathBuf> {
-    if show_all || is_remote {
-        // Remote sessions live in the server's filesystem namespace, so the client
-        // process cwd is not a meaningful row filter. If the user provided an
-        // explicit remote --cd, filtering is handled server-side in thread/list.
-        None
-    } else {
-        Some(config.cwd.to_path_buf())
-    }
-}
-
 fn paths_match(a: &Path, b: &Path) -> bool {
-    path_utils::paths_match_after_normalization(a, b)
+    if let (Ok(ca), Ok(cb)) = (
+        path_utils::normalize_for_path_comparison(a),
+        path_utils::normalize_for_path_comparison(b),
+    ) {
+        return ca == cb;
+    }
+    a == b
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1643,7 +1645,6 @@ fn column_visibility(
 mod tests {
     use super::*;
     use chrono::Duration;
-    use codex_core::config::ConfigBuilder;
     use codex_protocol::ThreadId;
 
     use crossterm::event::KeyCode;
@@ -1686,15 +1687,6 @@ mod tests {
             num_scanned_files,
             reached_scan_cap,
         })
-    }
-
-    async fn build_config(temp_dir: &tempfile::TempDir, cwd: &Path) -> Config {
-        ConfigBuilder::default()
-            .codex_home(temp_dir.path().to_path_buf())
-            .fallback_cwd(Some(cwd.to_path_buf()))
-            .build()
-            .await
-            .expect("config should build")
     }
 
     #[allow(dead_code)]
@@ -1902,32 +1894,6 @@ mod tests {
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
         assert_eq!(params.model_providers, None);
         assert_eq!(params.source_kinds, None);
-    }
-
-    #[tokio::test]
-    async fn local_picker_filter_uses_config_cwd() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&temp_dir, Path::new("/tmp/config-cwd")).await;
-
-        assert_eq!(
-            picker_filter_cwd(&config, /*show_all*/ false, /*is_remote*/ false),
-            Some(config.cwd.to_path_buf())
-        );
-    }
-
-    #[tokio::test]
-    async fn picker_filter_cwd_is_disabled_for_show_all_and_remote() {
-        let temp_dir = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&temp_dir, Path::new("/tmp/config-cwd")).await;
-
-        assert_eq!(
-            picker_filter_cwd(&config, /*show_all*/ true, /*is_remote*/ false),
-            None
-        );
-        assert_eq!(
-            picker_filter_cwd(&config, /*show_all*/ false, /*is_remote*/ true),
-            None
-        );
     }
 
     #[test]

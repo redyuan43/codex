@@ -9,7 +9,6 @@ use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequest as CoreElicitationRequest;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
-use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
 use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
@@ -29,7 +28,6 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
-use codex_protocol::mcp::CallToolResult as CoreMcpCallToolResult;
 use codex_protocol::mcp::Resource as McpResource;
 pub use codex_protocol::mcp::ResourceContent as McpResourceContent;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
@@ -413,14 +411,6 @@ v2_enum_from_core!(
         Warning, Stop, Feedback, Context, Error
     }
 );
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
-pub enum ThreadStartSource {
-    Startup,
-    Clear,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1070,7 +1060,6 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
             },
             CoreReviewDecision::Abort => Self::Cancel,
             CoreReviewDecision::Denied => Self::Decline,
-            CoreReviewDecision::TimedOut => Self::Decline,
         }
     }
 }
@@ -2018,48 +2007,6 @@ pub struct McpResourceReadResponse {
     pub contents: Vec<McpResourceContent>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct McpServerToolCallParams {
-    pub thread_id: String,
-    pub server: String,
-    pub tool: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub arguments: Option<JsonValue>,
-    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub meta: Option<JsonValue>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct McpServerToolCallResponse {
-    pub content: Vec<JsonValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub structured_content: Option<JsonValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub is_error: Option<bool>,
-    #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub meta: Option<JsonValue>,
-}
-
-impl From<CoreMcpCallToolResult> for McpServerToolCallResponse {
-    fn from(result: CoreMcpCallToolResult) -> Self {
-        Self {
-            content: result.content,
-            structured_content: result.structured_content,
-            is_error: result.is_error,
-            meta: result.meta,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2242,8 +2189,6 @@ pub struct FeedbackUploadParams {
     pub include_logs: bool,
     #[ts(optional = nullable)]
     pub extra_log_files: Option<Vec<PathBuf>>,
-    #[ts(optional = nullable)]
-    pub tags: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2671,8 +2616,6 @@ pub struct ThreadStartParams {
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
-    #[ts(optional = nullable)]
-    pub session_start_source: Option<ThreadStartSource>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -3048,10 +2991,23 @@ pub struct ThreadUnarchiveResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ThreadCompactStrategy {
+    PlanOnlyHandoff {
+        #[serde(rename = "planText")]
+        #[ts(rename = "planText")]
+        plan_text: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadCompactStartParams {
     pub thread_id: String,
+    #[ts(optional = nullable)]
+    pub strategy: Option<ThreadCompactStrategy>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3243,112 +3199,6 @@ pub struct ThreadReadParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadReadResponse {
     pub thread: Thread,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case", export_to = "v2/")]
-pub enum AlarmDelivery {
-    AfterTurn,
-    SteerCurrentTurn,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-#[ts(tag = "kind")]
-#[ts(export_to = "v2/")]
-pub enum AlarmTrigger {
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Delay {
-        #[ts(type = "number")]
-        seconds: u64,
-        repeat: Option<bool>,
-    },
-    #[serde(rename_all = "camelCase")]
-    #[ts(rename_all = "camelCase")]
-    Schedule {
-        dtstart: Option<String>,
-        rrule: Option<String>,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarm {
-    pub id: String,
-    pub trigger: AlarmTrigger,
-    pub prompt: String,
-    pub delivery: AlarmDelivery,
-    #[ts(type = "number")]
-    pub created_at: i64,
-    #[ts(type = "number | null")]
-    pub next_run_at: Option<i64>,
-    #[ts(type = "number | null")]
-    pub last_run_at: Option<i64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmCreateParams {
-    pub thread_id: String,
-    pub trigger: AlarmTrigger,
-    pub prompt: String,
-    pub delivery: AlarmDelivery,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmCreateResponse {
-    pub alarm: ThreadAlarm,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmDeleteParams {
-    pub thread_id: String,
-    pub id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmDeleteResponse {
-    pub deleted: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmListParams {
-    pub thread_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmListResponse {
-    pub data: Vec<ThreadAlarm>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmUpdatedNotification {
-    pub thread_id: String,
-    pub alarms: Vec<ThreadAlarm>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadAlarmFiredNotification {
-    pub thread_id: String,
-    pub alarm: ThreadAlarm,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4197,10 +4047,6 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
-    #[experimental("turn/start.responsesapiClientMetadata")]
-    #[ts(optional = nullable)]
-    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -4311,18 +4157,12 @@ pub struct TurnStartResponse {
     pub turn: Turn,
 }
 
-#[derive(
-    Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS, ExperimentalApi,
-)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnSteerParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
-    /// Optional turn-scoped Responses API client metadata.
-    #[experimental("turn/steer.responsesapiClientMetadata")]
-    #[ts(optional = nullable)]
-    pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     /// Required active turn id precondition. The request fails when it does not
     /// match the currently active turn.
     pub expected_turn_id: String,
@@ -4684,24 +4524,7 @@ pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
     Denied,
-    TimedOut,
     Aborted,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-/// [UNSTABLE] Source that produced a terminal guardian approval review decision.
-pub enum AutoReviewDecisionSource {
-    Agent,
-}
-
-impl From<CoreGuardianAssessmentDecisionSource> for AutoReviewDecisionSource {
-    fn from(value: CoreGuardianAssessmentDecisionSource) -> Self {
-        match value {
-            CoreGuardianAssessmentDecisionSource::Agent => Self::Agent,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -5460,23 +5283,14 @@ pub struct ItemStartedNotification {
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review. This shape is expected to change soon.
+///
+/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    /// Stable identifier for this review.
-    pub review_id: String,
-    /// Identifier for the reviewed item or tool call when one exists.
-    ///
-    /// In most cases, one review maps to one target item. The exceptions are
-    /// - execve reviews, where a single command may contain multiple execve
-    ///   calls to review (only possible when using the shell_zsh_fork feature)
-    /// - network policy reviews, where there is no target item
-    ///
-    /// A network call is triggered by a CommandExecution item, so having a
-    /// target_item_id set to the CommandExecution item would be misleading
-    /// because the review is about the network call, not the command execution.
-    /// Therefore, target_item_id is set to None for network policy reviews.
-    pub target_item_id: Option<String>,
+    pub target_item_id: String,
     pub review: GuardianApprovalReview,
     pub action: GuardianApprovalReviewAction,
 }
@@ -5486,24 +5300,14 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review. This shape is expected to change soon.
+///
+/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
-    /// Stable identifier for this review.
-    pub review_id: String,
-    /// Identifier for the reviewed item or tool call when one exists.
-    ///
-    /// In most cases, one review maps to one target item. The exceptions are
-    /// - execve reviews, where a single command may contain multiple execve
-    ///   calls to review (only possible when using the shell_zsh_fork feature)
-    /// - network policy reviews, where there is no target item
-    ///
-    /// A network call is triggered by a CommandExecution item, so having a
-    /// target_item_id set to the CommandExecution item would be misleading
-    /// because the review is about the network call, not the command execution.
-    /// Therefore, target_item_id is set to None for network policy reviews.
-    pub target_item_id: Option<String>,
-    pub decision_source: AutoReviewDecisionSource,
+    pub target_item_id: String,
     pub review: GuardianApprovalReview,
     pub action: GuardianApprovalReviewAction,
 }
@@ -8631,7 +8435,6 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
-            responsesapi_client_metadata: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

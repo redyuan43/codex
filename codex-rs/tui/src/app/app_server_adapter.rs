@@ -329,10 +329,6 @@ fn server_notification_thread_target(
         ServerNotification::ThreadNameUpdated(notification) => {
             Some(notification.thread_id.as_str())
         }
-        ServerNotification::ThreadAlarmFired(notification) => Some(notification.thread_id.as_str()),
-        ServerNotification::ThreadAlarmUpdated(notification) => {
-            Some(notification.thread_id.as_str())
-        }
         ServerNotification::ThreadTokenUsageUpdated(notification) => {
             Some(notification.thread_id.as_str())
         }

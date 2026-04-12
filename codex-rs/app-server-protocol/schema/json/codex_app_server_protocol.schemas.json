@@ -1232,30 +1232,6 @@
             },
             "method": {
               "enum": [
-                "mcpServer/tool/call"
-              ],
-              "title": "McpServer/tool/callRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/McpServerToolCallParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "McpServer/tool/callRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
                 "windowsSandbox/setupStart"
               ],
               "title": "WindowsSandbox/setupStartRequestMethod",
@@ -3423,13 +3399,6 @@
           "type": "string"
         },
         {
-          "description": "Automatic approval review timed out before reaching a decision.",
-          "enum": [
-            "timed_out"
-          ],
-          "type": "string"
-        },
-        {
           "description": "User has denied this command and the agent should not do anything until the user's next command.",
           "enum": [
             "abort"
@@ -3601,46 +3570,6 @@
             "params"
           ],
           "title": "Thread/name/updatedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/alarm/updated"
-              ],
-              "title": "Thread/alarm/updatedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadAlarmUpdatedNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/alarm/updatedNotification",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "enum": [
-                "thread/alarm/fired"
-              ],
-              "title": "Thread/alarm/firedNotificationMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/ThreadAlarmFiredNotification"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "title": "Thread/alarm/firedNotification",
           "type": "object"
         },
         {
@@ -5034,70 +4963,6 @@
       "AgentPath": {
         "type": "string"
       },
-      "AlarmDelivery": {
-        "enum": [
-          "after-turn",
-          "steer-current-turn"
-        ],
-        "type": "string"
-      },
-      "AlarmTrigger": {
-        "oneOf": [
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "delay"
-                ],
-                "type": "string"
-              },
-              "repeat": {
-                "type": [
-                  "boolean",
-                  "null"
-                ]
-              },
-              "seconds": {
-                "format": "uint64",
-                "minimum": 0.0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "kind",
-              "seconds"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "dtstart": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "kind": {
-                "enum": [
-                  "schedule"
-                ],
-                "type": "string"
-              },
-              "rrule": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "title": "KindAlarmTrigger",
-            "type": "object"
-          }
-        ]
-      },
       "AnalyticsConfig": {
         "additionalProperties": true,
         "properties": {
@@ -5670,13 +5535,6 @@
             "type": "string"
           }
         ]
-      },
-      "AutoReviewDecisionSource": {
-        "description": "[UNSTABLE] Source that produced a terminal guardian approval review decision.",
-        "enum": [
-          "agent"
-        ],
-        "type": "string"
       },
       "ByteRange": {
         "properties": {
@@ -7583,15 +7441,6 @@
               "null"
             ]
           },
-          "tags": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": [
-              "object",
-              "null"
-            ]
-          },
           "threadId": {
             "type": [
               "string",
@@ -8441,7 +8290,6 @@
           "inProgress",
           "approved",
           "denied",
-          "timedOut",
           "aborted"
         ],
         "type": "string"
@@ -8724,27 +8572,16 @@
       },
       "ItemGuardianApprovalReviewCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
         "properties": {
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
           },
-          "decisionSource": {
-            "$ref": "#/definitions/v2/AutoReviewDecisionSource"
-          },
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
-          "reviewId": {
-            "description": "Stable identifier for this review.",
-            "type": "string"
-          },
           "targetItemId": {
-            "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "threadId": {
             "type": "string"
@@ -8755,9 +8592,8 @@
         },
         "required": [
           "action",
-          "decisionSource",
           "review",
-          "reviewId",
+          "targetItemId",
           "threadId",
           "turnId"
         ],
@@ -8766,7 +8602,7 @@
       },
       "ItemGuardianApprovalReviewStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
         "properties": {
           "action": {
             "$ref": "#/definitions/v2/GuardianApprovalReviewAction"
@@ -8774,16 +8610,8 @@
           "review": {
             "$ref": "#/definitions/v2/GuardianApprovalReview"
           },
-          "reviewId": {
-            "description": "Stable identifier for this review.",
-            "type": "string"
-          },
           "targetItemId": {
-            "description": "Identifier for the reviewed item or tool call when one exists.\n\nIn most cases, one review maps to one target item. The exceptions are - execve reviews, where a single command may contain multiple execve calls to review (only possible when using the shell_zsh_fork feature) - network policy reviews, where there is no target item\n\nA network call is triggered by a CommandExecution item, so having a target_item_id set to the CommandExecution item would be misleading because the review is about the network call, not the command execution. Therefore, target_item_id is set to None for network policy reviews.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "threadId": {
             "type": "string"
@@ -8795,7 +8623,7 @@
         "required": [
           "action",
           "review",
-          "reviewId",
+          "targetItemId",
           "threadId",
           "turnId"
         ],
@@ -9349,51 +9177,6 @@
           "status"
         ],
         "title": "McpServerStatusUpdatedNotification",
-        "type": "object"
-      },
-      "McpServerToolCallParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "_meta": true,
-          "arguments": true,
-          "server": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "tool": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "server",
-          "threadId",
-          "tool"
-        ],
-        "title": "McpServerToolCallParams",
-        "type": "object"
-      },
-      "McpServerToolCallResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "_meta": true,
-          "content": {
-            "items": true,
-            "type": "array"
-          },
-          "isError": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "structuredContent": true
-        },
-        "required": [
-          "content"
-        ],
-        "title": "McpServerToolCallResponse",
         "type": "object"
       },
       "McpToolCallError": {
@@ -10028,7 +9811,6 @@
           "go",
           "plus",
           "pro",
-          "prolite",
           "team",
           "self_serve_business_usage_based",
           "business",
@@ -12728,85 +12510,6 @@
         ],
         "type": "string"
       },
-      "ThreadAlarm": {
-        "properties": {
-          "createdAt": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "delivery": {
-            "$ref": "#/definitions/v2/AlarmDelivery"
-          },
-          "id": {
-            "type": "string"
-          },
-          "lastRunAt": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "nextRunAt": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "prompt": {
-            "type": "string"
-          },
-          "trigger": {
-            "$ref": "#/definitions/v2/AlarmTrigger"
-          }
-        },
-        "required": [
-          "createdAt",
-          "delivery",
-          "id",
-          "prompt",
-          "trigger"
-        ],
-        "type": "object"
-      },
-      "ThreadAlarmFiredNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "alarm": {
-            "$ref": "#/definitions/v2/ThreadAlarm"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "alarm",
-          "threadId"
-        ],
-        "title": "ThreadAlarmFiredNotification",
-        "type": "object"
-      },
-      "ThreadAlarmUpdatedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "alarms": {
-            "items": {
-              "$ref": "#/definitions/v2/ThreadAlarm"
-            },
-            "type": "array"
-          },
-          "threadId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "alarms",
-          "threadId"
-        ],
-        "title": "ThreadAlarmUpdatedNotification",
-        "type": "object"
-      },
       "ThreadArchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -12854,6 +12557,16 @@
       "ThreadCompactStartParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "strategy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadCompactStrategy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "threadId": {
             "type": "string"
           }
@@ -12868,6 +12581,30 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadCompactStartResponse",
         "type": "object"
+      },
+      "ThreadCompactStrategy": {
+        "oneOf": [
+          {
+            "properties": {
+              "planText": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "planOnlyHandoff"
+                ],
+                "title": "PlanOnlyHandoffThreadCompactStrategyType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "planText",
+              "type"
+            ],
+            "title": "PlanOnlyHandoffThreadCompactStrategy",
+            "type": "object"
+          }
+        ]
       },
       "ThreadForkParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -14537,16 +14274,6 @@
                 "type": "null"
               }
             ]
-          },
-          "sessionStartSource": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ThreadStartSource"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "title": "ThreadStartParams",
@@ -14613,13 +14340,6 @@
         ],
         "title": "ThreadStartResponse",
         "type": "object"
-      },
-      "ThreadStartSource": {
-        "enum": [
-          "startup",
-          "clear"
-        ],
-        "type": "string"
       },
       "ThreadStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

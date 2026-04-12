@@ -23,7 +23,6 @@ pub enum SlashCommand {
     Experimental,
     Skills,
     Review,
-    Loop,
     Rename,
     New,
     Resume,
@@ -34,8 +33,8 @@ pub enum SlashCommand {
     Collab,
     Agent,
     // Undo,
-    Copy,
     Diff,
+    Copy,
     Mention,
     Status,
     DebugConfig,
@@ -76,15 +75,14 @@ impl SlashCommand {
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
-            SlashCommand::Loop => "create or list thread alarms",
             SlashCommand::Rename => "rename the current thread",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
-            SlashCommand::Copy => "copy last response as markdown",
             SlashCommand::Diff => "show git diff (including untracked files)",
+            SlashCommand::Copy => "copy the latest Codex output to your clipboard",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
@@ -132,10 +130,8 @@ impl SlashCommand {
             self,
             SlashCommand::Review
                 | SlashCommand::Rename
-                | SlashCommand::Loop
                 | SlashCommand::Plan
                 | SlashCommand::Fast
-                | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
         )
     }
@@ -166,7 +162,6 @@ impl SlashCommand {
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Rename
-            | SlashCommand::Loop
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status

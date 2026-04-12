@@ -1,9 +1,4 @@
 use super::*;
-use crate::alarms::AlarmDelivery;
-use crate::alarms::AlarmsState;
-use crate::alarms::ThreadAlarmTrigger;
-use crate::alarms::load_alarm_sidecar;
-use crate::alarms::write_alarm_sidecar;
 use crate::config::ConfigBuilder;
 use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
@@ -15,14 +10,11 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::function_tool::FunctionCallError;
-use crate::mcp_tool_exposure::DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD;
-use crate::mcp_tool_exposure::build_mcp_tool_exposure;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
 use codex_features::Features;
 use codex_login::CodexAuth;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
@@ -126,8 +118,6 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
-use tempfile::TempDir;
-use tokio::sync::Notify;
 
 #[path = "codex_tests_guardian.rs"]
 mod guardian_tests;
@@ -318,7 +308,8 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
-            deferred_mcp_tools: None,
+            tool_namespaces: None,
+            app_tools: None,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
@@ -419,13 +410,13 @@ fn make_mcp_tool(
             .map(|connector_name| format!("mcp__{server_name}__{connector_name}"))
             .unwrap_or_else(|| server_name.to_string())
     } else {
-        format!("mcp__{server_name}__")
+        server_name.to_string()
     };
 
     ToolInfo {
         server_name: server_name.to_string(),
-        callable_name: tool_name.to_string(),
-        callable_namespace: tool_namespace,
+        tool_name: tool_name.to_string(),
+        tool_namespace,
         server_instructions: None,
         tool: Tool {
             name: tool_name.to_string().into(),
@@ -443,42 +434,6 @@ fn make_mcp_tool(
         plugin_display_names: Vec::new(),
         connector_description: None,
     }
-}
-
-fn numbered_mcp_tools(count: usize) -> HashMap<String, ToolInfo> {
-    (0..count)
-        .map(|index| {
-            let tool_name = format!("tool_{index}");
-            (
-                format!("mcp__rmcp__{tool_name}"),
-                make_mcp_tool(
-                    "rmcp", &tool_name, /*connector_id*/ None, /*connector_name*/ None,
-                ),
-            )
-        })
-        .collect()
-}
-
-fn tools_config_for_mcp_tool_exposure(search_tool: bool) -> ToolsConfig {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests(
-        "gpt-5-codex",
-        &config.to_models_manager_config(),
-    );
-    let features = Features::with_defaults();
-    let available_models = Vec::new();
-    let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        image_generation_tool_auth_allowed: true,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    tools_config.search_tool = search_tool;
-    tools_config
 }
 
 #[test]
@@ -928,93 +883,156 @@ fn collect_explicit_app_ids_from_skill_items_skips_plain_mentions_with_skill_con
 }
 
 #[test]
-fn mcp_tool_exposure_directly_exposes_small_effective_tool_sets() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
-    let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
-
-    let exposure = build_mcp_tool_exposure(
-        &mcp_tools,
-        /*connectors*/ None,
-        &[],
-        &config,
-        &tools_config,
-    );
-
-    let mut direct_tool_names: Vec<_> = exposure.direct_tools.keys().cloned().collect();
-    direct_tool_names.sort();
-    let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
-    expected_tool_names.sort();
-    assert_eq!(direct_tool_names, expected_tool_names);
-    assert!(exposure.deferred_tools.is_none());
-}
-
-#[test]
-fn mcp_tool_exposure_searches_large_effective_tool_sets() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
-    let mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD);
-
-    let exposure = build_mcp_tool_exposure(
-        &mcp_tools,
-        /*connectors*/ None,
-        &[],
-        &config,
-        &tools_config,
-    );
-
-    assert!(exposure.direct_tools.is_empty());
-    let deferred_tools = exposure
-        .deferred_tools
-        .as_ref()
-        .expect("large tool sets should be discoverable through tool_search");
-    let mut deferred_tool_names: Vec<_> = deferred_tools.keys().cloned().collect();
-    deferred_tool_names.sort();
-    let mut expected_tool_names: Vec<_> = mcp_tools.keys().cloned().collect();
-    expected_tool_names.sort();
-    assert_eq!(deferred_tool_names, expected_tool_names);
-}
-
-#[test]
-fn mcp_tool_exposure_directly_exposes_explicit_apps_in_large_search_sets() {
-    let config = test_config();
-    let tools_config = tools_config_for_mcp_tool_exposure(/*search_tool*/ true);
-    let mut mcp_tools = numbered_mcp_tools(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD - 1);
-    mcp_tools.extend([(
-        "mcp__codex_apps__calendar_create_event".to_string(),
-        make_mcp_tool(
-            CODEX_APPS_MCP_SERVER_NAME,
-            "calendar_create_event",
-            Some("calendar"),
-            Some("Calendar"),
+fn non_app_mcp_tools_remain_visible_without_search_selection() {
+    let mcp_tools = HashMap::from([
+        (
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            make_mcp_tool(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "calendar_create_event",
+                Some("calendar"),
+                Some("Calendar"),
+            ),
         ),
-    )]);
-    let connectors = vec![make_connector("calendar", "Calendar")];
+        (
+            "mcp__rmcp__echo".to_string(),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
+        ),
+    ]);
 
-    let exposure = build_mcp_tool_exposure(
-        &mcp_tools,
-        Some(connectors.as_slice()),
-        connectors.as_slice(),
-        &config,
-        &tools_config,
+    let mut selected_mcp_tools = mcp_tools
+        .iter()
+        .filter(|(_, tool)| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect::<HashMap<_, _>>();
+
+    let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+    let explicitly_enabled_connectors = HashSet::new();
+    let connectors = filter_connectors_for_input(
+        &connectors,
+        &[user_message("run echo")],
+        &explicitly_enabled_connectors,
+        &HashMap::new(),
     );
+    let config = test_config();
+    selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
+        &mcp_tools,
+        &connectors,
+        &config,
+    ));
 
-    let mut tool_names: Vec<String> = exposure.direct_tools.into_keys().collect();
+    let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+    tool_names.sort();
+    assert_eq!(tool_names, vec!["mcp__rmcp__echo".to_string()]);
+}
+
+#[test]
+fn search_tool_selection_keeps_codex_apps_tools_without_mentions() {
+    let selected_tool_names = [
+        "mcp__codex_apps__calendar_create_event".to_string(),
+        "mcp__rmcp__echo".to_string(),
+    ];
+    let mcp_tools = HashMap::from([
+        (
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            make_mcp_tool(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "calendar_create_event",
+                Some("calendar"),
+                Some("Calendar"),
+            ),
+        ),
+        (
+            "mcp__rmcp__echo".to_string(),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
+        ),
+    ]);
+
+    let mut selected_mcp_tools = mcp_tools
+        .iter()
+        .filter(|(name, _)| selected_tool_names.contains(name))
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect::<HashMap<_, _>>();
+    let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+    let explicitly_enabled_connectors = HashSet::new();
+    let connectors = filter_connectors_for_input(
+        &connectors,
+        &[user_message("run the selected tools")],
+        &explicitly_enabled_connectors,
+        &HashMap::new(),
+    );
+    let config = test_config();
+    selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
+        &mcp_tools,
+        &connectors,
+        &config,
+    ));
+
+    let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
     tool_names.sort();
     assert_eq!(
         tool_names,
-        vec!["mcp__codex_apps__calendar_create_event".to_string()]
+        vec![
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            "mcp__rmcp__echo".to_string(),
+        ]
     );
+}
+
+#[test]
+fn apps_mentions_add_codex_apps_tools_to_search_selected_set() {
+    let selected_tool_names = ["mcp__rmcp__echo".to_string()];
+    let mcp_tools = HashMap::from([
+        (
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            make_mcp_tool(
+                CODEX_APPS_MCP_SERVER_NAME,
+                "calendar_create_event",
+                Some("calendar"),
+                Some("Calendar"),
+            ),
+        ),
+        (
+            "mcp__rmcp__echo".to_string(),
+            make_mcp_tool(
+                "rmcp", "echo", /*connector_id*/ None, /*connector_name*/ None,
+            ),
+        ),
+    ]);
+
+    let mut selected_mcp_tools = mcp_tools
+        .iter()
+        .filter(|(name, _)| selected_tool_names.contains(name))
+        .map(|(name, tool)| (name.clone(), tool.clone()))
+        .collect::<HashMap<_, _>>();
+    let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
+    let explicitly_enabled_connectors = HashSet::new();
+    let connectors = filter_connectors_for_input(
+        &connectors,
+        &[user_message("use $calendar and then echo the response")],
+        &explicitly_enabled_connectors,
+        &HashMap::new(),
+    );
+    let config = test_config();
+    selected_mcp_tools.extend(filter_codex_apps_mcp_tools(
+        &mcp_tools,
+        &connectors,
+        &config,
+    ));
+
+    let mut tool_names: Vec<String> = selected_mcp_tools.into_keys().collect();
+    tool_names.sort();
     assert_eq!(
-        exposure.deferred_tools.as_ref().map(HashMap::len),
-        Some(DIRECT_MCP_TOOL_EXPOSURE_THRESHOLD)
+        tool_names,
+        vec![
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            "mcp__rmcp__echo".to_string(),
+        ]
     );
-    let deferred_tools = exposure
-        .deferred_tools
-        .as_ref()
-        .expect("large tool sets should be discoverable through tool_search");
-    assert!(deferred_tools.contains_key("mcp__codex_apps__calendar_create_event"));
-    assert!(deferred_tools.contains_key("mcp__rmcp__tool_0"));
 }
 
 #[tokio::test]
@@ -1313,18 +1331,13 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
     // Forking reads the persisted rollout JSONL, so force the completed source turn to disk
     // before snapshotting from it.
     initial.codex.ensure_rollout_materialized().await;
-    initial
-        .codex
-        .flush_rollout()
-        .await
-        .expect("source rollout should flush before fork");
+    initial.codex.flush_rollout().await;
 
     let mut fork_config = initial.config.clone();
     fork_config.permissions.approval_policy =
@@ -1373,7 +1386,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&forked.thread, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1799,6 +1811,61 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     assert_eq!(rollback_event.num_turns, 1);
 
     assert_eq!(sess.clone_history().await.raw_items(), compacted_history);
+    assert!(sess.reference_context_item().await.is_none());
+}
+
+#[tokio::test]
+async fn compact_plan_only_handoff_replaces_history_with_plan_summary_and_preserves_ghost_snapshots()
+ {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    let ghost_snapshot = ResponseItem::GhostSnapshot {
+        ghost_commit: codex_git_utils::GhostCommit::new(
+            "ghost-1".to_string(),
+            /*parent*/ None,
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+    sess.replace_history(
+        vec![
+            user_message("old user message"),
+            assistant_message("old assistant message"),
+            ghost_snapshot.clone(),
+        ],
+        Some(tc.to_turn_context_item()),
+    )
+    .await;
+
+    handlers::compact_plan_only_handoff(
+        &sess,
+        "sub-1".to_string(),
+        "## Plan\n\n1. Keep this\n2. Implement it".to_string(),
+    )
+    .await;
+
+    loop {
+        let event = rx.recv().await.expect("event");
+        if matches!(event.msg, EventMsg::TurnComplete(_)) {
+            break;
+        }
+    }
+
+    let expected_summary = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "{}\n## Plan\n\n1. Keep this\n2. Implement it",
+                crate::compact::SUMMARY_PREFIX
+            ),
+        }],
+        end_turn: None,
+        phase: None,
+    };
+    assert_eq!(
+        sess.clone_history().await.raw_items(),
+        &[expected_summary, ghost_snapshot]
+    );
     assert!(sess.reference_context_item().await.is_none());
 }
 
@@ -2364,10 +2431,7 @@ async fn attach_rollout_recorder(session: &Arc<Session>) -> PathBuf {
         *rollout = Some(recorder);
     }
     session.ensure_rollout_materialized().await;
-    session
-        .flush_rollout()
-        .await
-        .expect("attached rollout should flush");
+    session.flush_rollout().await;
     rollout_path
 }
 
@@ -2749,7 +2813,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
                 .await
                 .expect("create environment"),
         )),
-        /*analytics_events_client*/ None,
     )
     .await;
 
@@ -2880,7 +2943,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
-        guardian_rejections: Mutex::new(std::collections::HashMap::new()),
+        guardian_rejection_rationales: Mutex::new(std::collections::HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -2948,13 +3011,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
-        alarm_start_in_progress: Mutex::new(false),
-        alarm_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
-        alarms: Mutex::new(AlarmsState::default()),
-        alarm_timers_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3275,7 +3334,6 @@ fn op_kind_distinguishes_turn_ops() {
         Op::UserInput {
             items: vec![],
             final_output_json_schema: None,
-            responsesapi_client_metadata: None,
         }
         .kind(),
         "user_input"
@@ -3729,7 +3787,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
-        guardian_rejections: Mutex::new(std::collections::HashMap::new()),
+        guardian_rejection_rationales: Mutex::new(std::collections::HashMap::new()),
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -3797,13 +3855,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
-        alarm_start_in_progress: Mutex::new(false),
-        alarm_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
-        alarms: Mutex::new(AlarmsState::default()),
-        alarm_timers_cancellation_token: CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3821,165 +3875,6 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     async_channel::Receiver<Event>,
 ) {
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
-}
-
-#[tokio::test]
-async fn dropping_session_cancels_alarm_timers() {
-    let (session, _, _) = make_session_and_context_with_rx().await;
-    let cancel_token = session.alarm_timers_cancellation_token.clone();
-
-    drop(session);
-
-    assert!(cancel_token.is_cancelled());
-}
-
-#[tokio::test]
-async fn maybe_start_pending_alarm_claims_only_one_alarm_while_start_is_in_progress() {
-    let (session, _, _) = make_session_and_context_with_rx().await;
-    let now = chrono::Utc::now();
-    {
-        let mut alarms = session.alarms.lock().await;
-        alarms
-            .create_alarm(
-                crate::alarms::CreateAlarm {
-                    id: "alarm-1".to_string(),
-                    trigger: ThreadAlarmTrigger::Delay {
-                        seconds: 10,
-                        repeat: Some(true),
-                    },
-                    prompt: "first".to_string(),
-                    delivery: AlarmDelivery::AfterTurn,
-                    now,
-                },
-                /*timer_cancel*/ None,
-            )
-            .expect("first alarm should be created");
-        alarms
-            .create_alarm(
-                crate::alarms::CreateAlarm {
-                    id: "alarm-2".to_string(),
-                    trigger: ThreadAlarmTrigger::Delay {
-                        seconds: 10,
-                        repeat: Some(true),
-                    },
-                    prompt: "second".to_string(),
-                    delivery: AlarmDelivery::AfterTurn,
-                    now,
-                },
-                /*timer_cancel*/ None,
-            )
-            .expect("second alarm should be created");
-        alarms.mark_alarm_due("alarm-1", now);
-        alarms.mark_alarm_due("alarm-2", now);
-    }
-
-    let first = Arc::clone(&session);
-    let second = Arc::clone(&session);
-    tokio::join!(
-        first.maybe_start_pending_alarm(),
-        second.maybe_start_pending_alarm()
-    );
-
-    let alarms = session.alarms.lock().await.list_alarms();
-    assert_eq!(
-        alarms
-            .iter()
-            .filter(|alarm| alarm.last_run_at.is_some())
-            .count(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn alarm_sidecar_persistence_serializes_stale_and_newer_snapshots() {
-    let (session, _, _) = make_session_and_context_with_rx().await;
-    let tempdir = TempDir::new().expect("tempdir");
-    let rollout_path = tempdir.path().join("rollout.jsonl");
-    let now = chrono::Utc::now();
-    {
-        let mut alarms = session.alarms.lock().await;
-        alarms
-            .create_alarm(
-                crate::alarms::CreateAlarm {
-                    id: "alarm-1".to_string(),
-                    trigger: ThreadAlarmTrigger::Delay {
-                        seconds: 10,
-                        repeat: Some(true),
-                    },
-                    prompt: "first".to_string(),
-                    delivery: AlarmDelivery::AfterTurn,
-                    now,
-                },
-                /*timer_cancel*/ None,
-            )
-            .expect("first alarm should be created");
-    }
-
-    let first_snapshot_taken = Arc::new(Notify::new());
-    let allow_first_write = Arc::new(Notify::new());
-    let first_session = Arc::clone(&session);
-    let first_rollout_path = rollout_path.clone();
-    let first_snapshot_taken_for_task = Arc::clone(&first_snapshot_taken);
-    let allow_first_write_for_task = Arc::clone(&allow_first_write);
-    let first_write = tokio::spawn(async move {
-        first_session
-            .persist_alarms_sidecar_with_writer(|alarms| async move {
-                first_snapshot_taken_for_task.notify_one();
-                allow_first_write_for_task.notified().await;
-                write_alarm_sidecar(&first_rollout_path, &alarms).await
-            })
-            .await
-            .expect("first persist should succeed");
-    });
-    first_snapshot_taken.notified().await;
-
-    {
-        let mut alarms = session.alarms.lock().await;
-        let removed = alarms
-            .remove_alarm("alarm-1")
-            .expect("first alarm should be removable");
-        AlarmsState::cancel_runtime(&removed);
-        alarms
-            .create_alarm(
-                crate::alarms::CreateAlarm {
-                    id: "alarm-2".to_string(),
-                    trigger: ThreadAlarmTrigger::Delay {
-                        seconds: 10,
-                        repeat: Some(true),
-                    },
-                    prompt: "second".to_string(),
-                    delivery: AlarmDelivery::AfterTurn,
-                    now,
-                },
-                /*timer_cancel*/ None,
-            )
-            .expect("second alarm should be created");
-    }
-
-    let second_session = Arc::clone(&session);
-    let second_rollout_path = rollout_path.clone();
-    let second_write = tokio::spawn(async move {
-        second_session
-            .persist_alarms_sidecar_with_writer(|alarms| async move {
-                write_alarm_sidecar(&second_rollout_path, &alarms).await
-            })
-            .await
-            .expect("second persist should succeed");
-    });
-
-    allow_first_write.notify_one();
-    first_write
-        .await
-        .expect("first persist task should complete");
-    second_write
-        .await
-        .expect("second persist task should complete");
-
-    let loaded = load_alarm_sidecar(&rollout_path)
-        .await
-        .expect("alarm sidecar should load");
-    let persisted = session.alarms.lock().await.persisted_alarms();
-    assert_eq!(loaded, persisted);
 }
 
 #[tokio::test]
@@ -4598,7 +4493,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
             .expect("serialize expected context item")
     );
     session.ensure_rollout_materialized().await;
-    session.flush_rollout().await.expect("rollout should flush");
+    session.flush_rollout().await;
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
         .await
@@ -4700,7 +4595,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
     session.ensure_rollout_materialized().await;
-    session.flush_rollout().await.expect("rollout should flush");
+    session.flush_rollout().await;
 
     let InitialHistory::Resumed(resumed) = RolloutRecorder::get_rollout_history(&rollout_path)
         .await
@@ -5017,9 +4912,7 @@ async fn steer_input_requires_active_turn() {
     }];
 
     let err = sess
-        .steer_input(
-            input, /*expected_turn_id*/ None, /*responsesapi_client_metadata*/ None,
-        )
+        .steer_input(input, /*expected_turn_id*/ None)
         .await
         .expect_err("steering without active turn should fail");
 
@@ -5048,11 +4941,7 @@ async fn steer_input_enforces_expected_turn_id() {
         text_elements: Vec::new(),
     }];
     let err = sess
-        .steer_input(
-            steer_input,
-            Some("different-turn-id"),
-            /*responsesapi_client_metadata*/ None,
-        )
+        .steer_input(steer_input, Some("different-turn-id"))
         .await
         .expect_err("mismatched expected turn id should fail");
 
@@ -5094,11 +4983,7 @@ async fn steer_input_rejects_non_regular_turns() {
             text_elements: Vec::new(),
         }];
         let err = sess
-            .steer_input(
-                steer_input,
-                /*expected_turn_id*/ None,
-                /*responsesapi_client_metadata*/ None,
-            )
+            .steer_input(steer_input, /*expected_turn_id*/ None)
             .await
             .expect_err("steering a non-regular turn should fail");
 
@@ -5130,11 +5015,7 @@ async fn steer_input_returns_active_turn_id() {
         text_elements: Vec::new(),
     }];
     let turn_id = sess
-        .steer_input(
-            steer_input,
-            Some(&tc.sub_id),
-            /*responsesapi_client_metadata*/ None,
-        )
+        .steer_input(steer_input, Some(&tc.sub_id))
         .await
         .expect("steering with matching expected turn id should succeed");
 
@@ -5321,7 +5202,6 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
             text_elements: Vec::new(),
         }],
         Some(&tc.sub_id),
-        /*responsesapi_client_metadata*/ None,
     )
     .await
     .expect("steered input should be accepted");
@@ -5366,7 +5246,6 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
             text_elements: Vec::new(),
         }],
         Some(&tc.sub_id),
-        /*responsesapi_client_metadata*/ None,
     )
     .await
     .expect("steered input should be accepted");
@@ -5521,12 +5400,14 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .list_all_tools()
             .await
     };
-    let deferred_mcp_tools = Some(tools.clone());
+    let app_tools = Some(tools.clone());
+    let mcp_tool_router_inputs = crate::tools::router::map_mcp_tool_infos(&tools);
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            deferred_mcp_tools,
-            mcp_tools: Some(tools),
+            mcp_tools: Some(mcp_tool_router_inputs.mcp_tools),
+            tool_namespaces: Some(mcp_tool_router_inputs.tool_namespaces),
+            app_tools,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },
@@ -5792,7 +5673,8 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&turn_diff_tracker),
             call_id,
-            tool_name: codex_tools::ToolName::plain(tool_name),
+            tool_name: tool_name.to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "command": params.command.clone(),
@@ -5870,7 +5752,8 @@ async fn unified_exec_rejects_escalated_permissions_when_policy_not_on_request()
             turn: Arc::clone(&turn_context),
             tracker: Arc::clone(&tracker),
             call_id: "exec-call".to_string(),
-            tool_name: codex_tools::ToolName::plain("exec_command"),
+            tool_name: "exec_command".to_string(),
+            tool_namespace: None,
             payload: ToolPayload::Function {
                 arguments: serde_json::json!({
                     "cmd": "echo hi",
