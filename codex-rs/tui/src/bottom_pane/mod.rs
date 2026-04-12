@@ -1178,6 +1178,10 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_live_placeholder_summary(&mut self, summary: Option<String>) {
+        self.composer.set_live_placeholder_summary(summary);
+    }
+
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
         if self.view_stack.is_empty() {
             self.composer.attach_image(path);

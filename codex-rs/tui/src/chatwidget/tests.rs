@@ -264,6 +264,7 @@ mod permissions;
 mod plan_mode;
 mod popups_and_settings;
 mod review_mode;
+mod session_summary;
 mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
