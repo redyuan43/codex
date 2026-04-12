@@ -1052,6 +1052,38 @@ async fn successful_plan_only_compaction_auto_submits_implementation() {
 }
 
 #[tokio::test]
+async fn replayed_plan_only_compaction_auto_submits_implementation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let default_mode = collaboration_modes::default_mode_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+
+    chat.on_task_started();
+    chat.set_pending_post_compact_implementation(default_mode);
+    chat.completed_context_compaction_this_turn = true;
+    chat.on_task_complete(/*last_agent_message*/ None, /*from_replay*/ true);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            items,
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    ..
+                }),
+            ..
+        } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected auto-submitted Op::UserTurn during replay, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn failed_plan_only_compaction_does_not_auto_submit_implementation() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());

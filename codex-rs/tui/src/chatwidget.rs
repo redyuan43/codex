@@ -2388,8 +2388,8 @@ impl ChatWidget {
         let had_pending_steers = !self.pending_steers.is_empty();
         self.refresh_pending_input_preview();
 
-        if !from_replay
-            && !self.try_auto_submit_post_compact_implementation(had_pending_steers)
+        if !self.try_auto_submit_post_compact_implementation(had_pending_steers)
+            && !from_replay
             && !self.has_queued_follow_up_messages()
             && !had_pending_steers
         {
