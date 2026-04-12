@@ -821,6 +821,7 @@ async fn make_chatwidget_manual(
         current_status_header: String::from("Working"),
         session_context_anchor: None,
         live_stage_summary: None,
+        recent_progress_summary: None,
         retry_status_header: None,
         thread_id: None,
         forked_from: None,
@@ -3932,6 +3933,25 @@ async fn mcp_startup_header_booting_snapshot() {
 }
 
 #[tokio::test]
+async fn progress_placeholder_shows_anchor_and_recent_progress_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.set_session_context_anchor(Some("修复输入框提示".to_string()));
+    chat.set_recent_progress_summary(Some("Applied code changes".to_string()));
+
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw chat widget");
+    assert_snapshot!(
+        "progress_placeholder_shows_anchor_and_recent_progress",
+        terminal.backend()
+    );
+}
+
+#[tokio::test]
 async fn mcp_startup_complete_does_not_clear_running_task() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -4088,6 +4108,78 @@ async fn short_operational_follow_up_does_not_override_anchor() {
     assert_eq!(
         chat.session_context_anchor.as_deref(),
         Some("Implement live session summaries in the composer")
+    );
+}
+
+#[tokio::test]
+async fn short_chinese_task_message_seeds_anchor() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.maybe_seed_session_context_anchor("修复提示");
+
+    assert_eq!(chat.session_context_anchor.as_deref(), Some("修复提示"));
+}
+
+#[tokio::test]
+async fn successful_exec_updates_recent_progress_summary() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_exec_end_now(ExecCommandEndEvent {
+        call_id: "exec-1".to_string(),
+        process_id: None,
+        turn_id: "turn-1".to_string(),
+        command: vec!["rg".to_string(), "placeholder".to_string()],
+        cwd: PathBuf::from("/tmp"),
+        parsed_cmd: vec![ParsedCommand::Search {
+            cmd: "rg placeholder".to_string(),
+            query: Some("placeholder".to_string()),
+            path: None,
+        }],
+        source: ExecCommandSource::Agent,
+        interaction_input: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        aggregated_output: String::new(),
+        exit_code: 0,
+        duration: std::time::Duration::from_millis(10),
+        formatted_output: String::new(),
+    });
+
+    assert_eq!(
+        chat.recent_progress_summary.as_deref(),
+        Some("Searched for `placeholder`")
+    );
+}
+
+#[tokio::test]
+async fn recent_progress_survives_turn_complete_after_stage_clears() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_session_context_anchor(Some("修复输入框提示".to_string()));
+    chat.set_recent_progress_summary(Some("Applied code changes".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Tracing render path**".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert_eq!(chat.live_stage_summary, None);
+    assert_eq!(
+        chat.recent_progress_summary.as_deref(),
+        Some("Applied code changes")
     );
 }
 

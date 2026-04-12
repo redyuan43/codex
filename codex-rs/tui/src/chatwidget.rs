@@ -62,6 +62,7 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
+use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
@@ -486,6 +487,8 @@ pub(crate) struct ChatWidget {
     session_context_anchor: Option<String>,
     // Best-effort one-line summary of the current execution stage.
     live_stage_summary: Option<String>,
+    // Most recent completed step that helps the user rehydrate session progress.
+    recent_progress_summary: Option<String>,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
@@ -747,11 +750,17 @@ impl ChatWidget {
     }
 
     fn sync_runtime_placeholder_summary(&mut self) {
-        let summary = match (&self.session_context_anchor, &self.live_stage_summary) {
-            (Some(anchor), Some(stage)) => Some(format!("{anchor} · {stage}")),
-            (Some(anchor), None) => Some(anchor.clone()),
-            (None, Some(stage)) => Some(stage.clone()),
-            (None, None) => None,
+        let summary = match (
+            &self.session_context_anchor,
+            &self.live_stage_summary,
+            &self.recent_progress_summary,
+        ) {
+            (Some(anchor), Some(stage), _) => Some(format!("{anchor} · {stage}")),
+            (Some(anchor), None, Some(progress)) => Some(format!("{anchor} · {progress}")),
+            (Some(anchor), None, None) => Some(anchor.clone()),
+            (None, Some(stage), _) => Some(stage.clone()),
+            (None, None, Some(progress)) => Some(progress.clone()),
+            (None, None, None) => None,
         };
         self.bottom_pane.set_live_placeholder_summary(summary);
     }
@@ -766,9 +775,6 @@ impl ChatWidget {
     }
 
     fn maybe_seed_session_context_anchor(&mut self, message: &str) {
-        if self.session_context_anchor.is_some() {
-            return;
-        }
         if !is_substantive_session_anchor_candidate(message) {
             return;
         }
@@ -788,6 +794,15 @@ impl ChatWidget {
             return;
         }
         self.live_stage_summary = normalized;
+        self.sync_runtime_placeholder_summary();
+    }
+
+    fn set_recent_progress_summary(&mut self, summary: Option<String>) {
+        let normalized = summary.and_then(|summary| normalize_summary_line(&summary));
+        if self.recent_progress_summary == normalized {
+            return;
+        }
+        self.recent_progress_summary = normalized;
         self.sync_runtime_placeholder_summary();
     }
 
@@ -816,6 +831,7 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_session_context_anchor(None);
         self.set_live_stage_summary(None);
+        self.set_recent_progress_summary(None);
         self.set_skills(None);
         self.bottom_pane.set_connectors_snapshot(None);
         self.thread_id = Some(event.session_id);
@@ -1831,6 +1847,11 @@ impl ChatWidget {
         };
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
+        let progress_summary = if ev.exit_code == 0 {
+            summarize_exec_progress(&parsed, &command)
+        } else {
+            None
+        };
 
         let needs_new = self
             .active_cell
@@ -1875,6 +1896,9 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
+        if let Some(progress_summary) = progress_summary {
+            self.set_recent_progress_summary(Some(progress_summary));
+        }
         // Mark that actual work was done (command executed)
         self.had_work_activity = true;
     }
@@ -1885,7 +1909,9 @@ impl ChatWidget {
     ) {
         // If the patch was successful, just let the "Edited" block stand.
         // Otherwise, add a failure block.
-        if !event.success {
+        if event.success {
+            self.set_recent_progress_summary(Some("Applied code changes".to_string()));
+        } else {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
         // Mark that actual work was done (patch applied)
@@ -2037,6 +2063,14 @@ impl ChatWidget {
             duration,
             result,
         } = ev;
+        let progress_summary = if result
+            .as_ref()
+            .is_ok_and(|tool_result| !tool_result.is_error.unwrap_or(false))
+        {
+            summarize_mcp_progress(&invocation)
+        } else {
+            None
+        };
 
         let extra_cell = match self
             .active_cell
@@ -2060,6 +2094,9 @@ impl ChatWidget {
         self.flush_active_cell();
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
+        }
+        if let Some(progress_summary) = progress_summary {
+            self.set_recent_progress_summary(Some(progress_summary));
         }
         // Mark that actual work was done (MCP tool call)
         self.had_work_activity = true;
@@ -2157,6 +2194,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             session_context_anchor: None,
             live_stage_summary: None,
+            recent_progress_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -2297,6 +2335,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             session_context_anchor: None,
             live_stage_summary: None,
+            recent_progress_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -2426,6 +2465,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             session_context_anchor: None,
             live_stage_summary: None,
+            recent_progress_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -5952,10 +5992,6 @@ fn is_substantive_session_anchor_candidate(message: &str) -> bool {
     let Some(normalized) = normalize_summary_line(message) else {
         return false;
     };
-    if normalized.len() < 12 {
-        return false;
-    }
-
     let lower = normalized.to_ascii_lowercase();
     let exact_short_follow_ups = [
         "continue",
@@ -5992,6 +6028,52 @@ fn is_substantive_session_anchor_candidate(message: &str) -> bool {
     }
 
     true
+}
+
+fn summarize_exec_progress(parsed: &[ParsedCommand], command: &[String]) -> Option<String> {
+    match parsed.first() {
+        Some(ParsedCommand::Search { query, .. }) => Some(match query {
+            Some(query) => format!("Searched for `{query}`"),
+            None => "Ran a search".to_string(),
+        }),
+        Some(ParsedCommand::ListFiles { path, .. }) => Some(match path {
+            Some(path) => format!("Listed files in `{path}`"),
+            None => "Listed files".to_string(),
+        }),
+        Some(ParsedCommand::Read { name, path, .. }) => {
+            let label = if name.is_empty() {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("file")
+                    .to_string()
+            } else {
+                name.clone()
+            };
+            Some(format!("Read `{label}`"))
+        }
+        Some(ParsedCommand::Unknown { cmd }) => summarize_unknown_command_progress(cmd),
+        None => summarize_unknown_command_progress(&command.join(" ")),
+    }
+}
+
+fn summarize_unknown_command_progress(command: &str) -> Option<String> {
+    let normalized = normalize_summary_line(command)?;
+    let first = normalized
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(|c: char| c == '`' || c == '\'' || c == '"');
+    if first.is_empty() {
+        return None;
+    }
+
+    Some(format!("Finished `{first}`"))
+}
+
+fn summarize_mcp_progress(invocation: &McpInvocation) -> Option<String> {
+    let server = normalize_summary_line(&invocation.server)?;
+    let tool = normalize_summary_line(&invocation.tool)?;
+    Some(format!("Completed {server}/{tool}"))
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
