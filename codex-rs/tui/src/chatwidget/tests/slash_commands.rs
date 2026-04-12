@@ -89,6 +89,49 @@ async fn slash_quit_requests_exit() {
 }
 
 #[tokio::test]
+async fn slash_loop_opens_thread_alarms_for_active_thread() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.set_feature_enabled(Feature::AlarmScheduler, true);
+
+    chat.dispatch_command(SlashCommand::Loop);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenThreadAlarms {
+            thread_id: event_thread_id
+        }) if event_thread_id == thread_id
+    );
+}
+
+#[tokio::test]
+async fn slash_loop_with_args_requests_alarm_spec_parse() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::AlarmScheduler, true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.bottom_pane.set_composer_text(
+        "/loop every 5 minutes review the repo".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Loop,
+        "every 5 minutes review the repo".to_string(),
+        Vec::new(),
+    );
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::CreateThreadAlarmFromSpec {
+            thread_id: event_thread_id,
+            spec
+        }) if event_thread_id == thread_id && spec == "every 5 minutes review the repo"
+    );
+}
+#[tokio::test]
 async fn slash_copy_state_tracks_turn_complete_final_reply() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

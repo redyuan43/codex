@@ -18,6 +18,7 @@ use codex_login::CodexAuth;
 use codex_mcp::ToolInfo;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::bundled_models_response;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::model_info;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -3011,9 +3012,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        alarm_start_in_progress: Mutex::new(false),
+        alarm_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        alarms: Mutex::new(crate::alarms::AlarmsState::default()),
+        alarm_timers_cancellation_token: tokio_util::sync::CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3855,9 +3860,13 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        alarm_start_in_progress: Mutex::new(false),
+        alarm_sidecar_write_lock: Mutex::new(()),
         mailbox,
         mailbox_rx: Mutex::new(mailbox_rx),
         idle_pending_input: Mutex::new(Vec::new()),
+        alarms: Mutex::new(crate::alarms::AlarmsState::default()),
+        alarm_timers_cancellation_token: tokio_util::sync::CancellationToken::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,

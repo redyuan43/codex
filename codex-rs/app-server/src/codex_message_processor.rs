@@ -24,6 +24,8 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+use codex_app_server_protocol::AlarmDelivery as ApiAlarmDelivery;
+use codex_app_server_protocol::AlarmTrigger as ApiAlarmTrigger;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -115,6 +117,13 @@ use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadAlarm as ApiThreadAlarm;
+use codex_app_server_protocol::ThreadAlarmCreateParams;
+use codex_app_server_protocol::ThreadAlarmCreateResponse;
+use codex_app_server_protocol::ThreadAlarmDeleteParams;
+use codex_app_server_protocol::ThreadAlarmDeleteResponse;
+use codex_app_server_protocol::ThreadAlarmListParams;
+use codex_app_server_protocol::ThreadAlarmListResponse;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
@@ -775,6 +784,18 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadRead { request_id, params } => {
                 self.thread_read(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadAlarmCreate { request_id, params } => {
+                self.thread_alarm_create(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadAlarmDelete { request_id, params } => {
+                self.thread_alarm_delete(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::ThreadAlarmList { request_id, params } => {
+                self.thread_alarm_list(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::ThreadShellCommand { request_id, params } => {
@@ -3690,6 +3711,106 @@ impl CodexMessageProcessor {
         );
         let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_alarm_create(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadAlarmCreateParams,
+    ) {
+        let ThreadAlarmCreateParams {
+            thread_id,
+            trigger,
+            prompt,
+            delivery,
+        } = params;
+        let Some(thread) = self.load_alarm_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        match thread
+            .create_alarm(
+                alarm_trigger_to_core(trigger),
+                prompt,
+                alarm_delivery_to_core(delivery),
+            )
+            .await
+        {
+            Ok(alarm) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        ThreadAlarmCreateResponse {
+                            alarm: api_thread_alarm_from_core(alarm),
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => self.send_invalid_request_error(request_id, err).await,
+        }
+    }
+
+    async fn thread_alarm_delete(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadAlarmDeleteParams,
+    ) {
+        let ThreadAlarmDeleteParams { thread_id, id } = params;
+        let Some(thread) = self.load_alarm_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        let deleted = match thread.delete_alarm(&id).await {
+            Ok(deleted) => deleted,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, err).await;
+                return;
+            }
+        };
+        self.outgoing
+            .send_response(request_id, ThreadAlarmDeleteResponse { deleted })
+            .await;
+    }
+
+    async fn thread_alarm_list(
+        &mut self,
+        request_id: ConnectionRequestId,
+        params: ThreadAlarmListParams,
+    ) {
+        let ThreadAlarmListParams { thread_id } = params;
+        let Some(thread) = self.load_alarm_thread(request_id.clone(), &thread_id).await else {
+            return;
+        };
+        let data = thread
+            .list_alarms()
+            .await
+            .into_iter()
+            .map(api_thread_alarm_from_core)
+            .collect();
+        self.outgoing
+            .send_response(request_id, ThreadAlarmListResponse { data })
+            .await;
+    }
+
+    async fn load_alarm_thread(
+        &mut self,
+        request_id: ConnectionRequestId,
+        thread_id: &str,
+    ) -> Option<Arc<CodexThread>> {
+        let (_, thread) = match self.load_thread(thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return None;
+            }
+        };
+        if !thread.enabled(Feature::AlarmScheduler) {
+            self.send_invalid_request_error(
+                request_id,
+                format!("thread {thread_id} does not support alarm scheduling"),
+            )
+            .await;
+            return None;
+        }
+        Some(thread)
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -9035,6 +9156,54 @@ fn with_thread_spawn_agent_metadata(
             },
         ),
         _ => source,
+    }
+}
+
+fn alarm_delivery_to_core(value: ApiAlarmDelivery) -> codex_core::alarms::AlarmDelivery {
+    match value {
+        ApiAlarmDelivery::AfterTurn => codex_core::alarms::AlarmDelivery::AfterTurn,
+        ApiAlarmDelivery::SteerCurrentTurn => codex_core::alarms::AlarmDelivery::SteerCurrentTurn,
+    }
+}
+
+fn api_alarm_delivery_from_core(value: codex_core::alarms::AlarmDelivery) -> ApiAlarmDelivery {
+    match value {
+        codex_core::alarms::AlarmDelivery::AfterTurn => ApiAlarmDelivery::AfterTurn,
+        codex_core::alarms::AlarmDelivery::SteerCurrentTurn => ApiAlarmDelivery::SteerCurrentTurn,
+    }
+}
+
+fn alarm_trigger_to_core(value: ApiAlarmTrigger) -> codex_core::alarms::ThreadAlarmTrigger {
+    match value {
+        ApiAlarmTrigger::Delay { seconds, repeat } => {
+            codex_core::alarms::ThreadAlarmTrigger::Delay { seconds, repeat }
+        }
+        ApiAlarmTrigger::Schedule { dtstart, rrule } => {
+            codex_core::alarms::ThreadAlarmTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
+
+fn api_alarm_trigger_from_core(value: codex_core::alarms::ThreadAlarmTrigger) -> ApiAlarmTrigger {
+    match value {
+        codex_core::alarms::ThreadAlarmTrigger::Delay { seconds, repeat } => {
+            ApiAlarmTrigger::Delay { seconds, repeat }
+        }
+        codex_core::alarms::ThreadAlarmTrigger::Schedule { dtstart, rrule } => {
+            ApiAlarmTrigger::Schedule { dtstart, rrule }
+        }
+    }
+}
+
+fn api_thread_alarm_from_core(value: codex_core::alarms::ThreadAlarm) -> ApiThreadAlarm {
+    ApiThreadAlarm {
+        id: value.id,
+        trigger: api_alarm_trigger_from_core(value.trigger),
+        prompt: value.prompt,
+        delivery: api_alarm_delivery_from_core(value.delivery),
+        created_at: value.created_at,
+        next_run_at: value.next_run_at,
+        last_run_at: value.last_run_at,
     }
 }
 

@@ -41,6 +41,8 @@ use std::time::Instant;
 use url::Url;
 
 use self::realtime::PendingSteerCompareKey;
+use crate::alarm_scheduler::format_alarm_trigger;
+use crate::alarm_scheduler::trigger_is_recurring;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_server_approval_conversions::network_approval_context_to_core;
@@ -67,6 +69,7 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::AlarmDelivery;
 use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
@@ -84,6 +87,7 @@ use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadAlarm;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
@@ -848,6 +852,7 @@ pub(crate) struct ChatWidget {
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
+    thread_alarms: Vec<ThreadAlarm>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1958,6 +1963,7 @@ impl ChatWidget {
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
+        self.thread_alarms.clear();
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
         match AbsolutePathBuf::try_from(event.cwd.clone()) {
@@ -2005,6 +2011,7 @@ impl ChatWidget {
         self.refresh_model_display();
         self.refresh_status_surfaces();
         self.sync_fast_command_enabled();
+        self.sync_alarm_scheduler_command_enabled();
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
         self.refresh_plugin_mentions();
@@ -4838,6 +4845,7 @@ impl ChatWidget {
             thread_id: None,
             thread_name: None,
             forked_from: None,
+            thread_alarms: Vec::new(),
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
@@ -4900,6 +4908,7 @@ impl ChatWidget {
             .bottom_pane
             .set_collaboration_modes_enabled(/*enabled*/ true);
         widget.sync_fast_command_enabled();
+        widget.sync_alarm_scheduler_command_enabled();
         widget.sync_personality_command_enabled();
         widget.sync_plugins_command_enabled();
         widget
@@ -5217,6 +5226,14 @@ impl ChatWidget {
             }
             SlashCommand::Review => {
                 self.open_review_popup();
+            }
+            SlashCommand::Loop => {
+                let Some(thread_id) = self.thread_id else {
+                    self.add_error_message("No active thread is available.".to_string());
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::OpenThreadAlarms { thread_id });
             }
             SlashCommand::Rename => {
                 self.session_telemetry
@@ -5601,6 +5618,23 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Loop if !trimmed.is_empty() => {
+                let Some(thread_id) = self.thread_id else {
+                    self.add_error_message("No active thread is available.".to_string());
+                    return;
+                };
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::CreateThreadAlarmFromSpec {
+                    thread_id,
+                    spec: prepared_args,
+                });
+                self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
@@ -6480,6 +6514,12 @@ impl ChatWidget {
                         );
                     }
                 }
+            }
+            ServerNotification::ThreadAlarmUpdated(notification) => {
+                self.on_thread_alarms_updated(notification.alarms);
+            }
+            ServerNotification::ThreadAlarmFired(notification) => {
+                self.on_thread_alarm_fired(notification.alarm);
             }
             ServerNotification::TurnStarted(_) => {
                 self.last_non_retry_error = None;
@@ -9545,6 +9585,9 @@ impl ChatWidget {
         if feature == Feature::FastMode {
             self.sync_fast_command_enabled();
         }
+        if feature == Feature::AlarmScheduler {
+            self.sync_alarm_scheduler_command_enabled();
+        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
@@ -9783,6 +9826,12 @@ impl ChatWidget {
     fn sync_fast_command_enabled(&mut self) {
         self.bottom_pane
             .set_fast_command_enabled(self.fast_mode_enabled());
+    }
+
+    fn sync_alarm_scheduler_command_enabled(&mut self) {
+        self.bottom_pane.set_alarm_scheduler_command_enabled(
+            self.config.features.enabled(Feature::AlarmScheduler),
+        );
     }
 
     fn sync_personality_command_enabled(&mut self) {
@@ -10117,6 +10166,71 @@ impl ChatWidget {
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
+    }
+
+    pub(crate) fn on_thread_alarms_updated(&mut self, alarms: Vec<ThreadAlarm>) {
+        self.thread_alarms = alarms;
+    }
+
+    pub(crate) fn on_thread_alarm_fired(&mut self, alarm: ThreadAlarm) {
+        let delivery = match alarm.delivery {
+            AlarmDelivery::AfterTurn => "after-turn",
+            AlarmDelivery::SteerCurrentTurn => "steer-current-turn",
+        };
+        let trigger = format_alarm_trigger(&alarm.trigger);
+        let schedule = if trigger_is_recurring(&alarm.trigger) {
+            format!("Running thread alarm • {trigger} • {delivery}")
+        } else {
+            format!("Running thread alarm • {trigger} • one-shot • {delivery}")
+        };
+        self.add_info_message(alarm.prompt, Some(schedule));
+    }
+
+    pub(crate) fn open_thread_alarms_popup(
+        &mut self,
+        thread_id: ThreadId,
+        alarms: Vec<ThreadAlarm>,
+    ) {
+        self.thread_alarms = alarms.clone();
+        if alarms.is_empty() {
+            self.add_info_message(
+                "No thread alarms are currently scheduled.".to_string(),
+                Some("Use `/loop <spec>` to create one.".to_string()),
+            );
+            return;
+        }
+
+        let items = alarms
+            .into_iter()
+            .map(|alarm| {
+                let alarm_id = alarm.id.clone();
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::DeleteThreadAlarm {
+                        thread_id,
+                        id: alarm_id.clone(),
+                    });
+                })];
+                let trigger = format_alarm_trigger(&alarm.trigger);
+                let name = if trigger_is_recurring(&alarm.trigger) {
+                    trigger
+                } else {
+                    format!("{trigger} • one-shot")
+                };
+                SelectionItem {
+                    name,
+                    description: Some(alarm.prompt),
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Thread alarms".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {

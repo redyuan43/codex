@@ -16,6 +16,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;

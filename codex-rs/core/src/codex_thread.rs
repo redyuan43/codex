@@ -1,4 +1,7 @@
 use crate::agent::AgentStatus;
+use crate::alarms::AlarmDelivery;
+use crate::alarms::ThreadAlarm;
+use crate::alarms::ThreadAlarmTrigger;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
@@ -257,6 +260,26 @@ impl CodexThread {
         }
 
         Ok(*guard)
+    }
+
+    pub async fn create_alarm(
+        &self,
+        trigger: ThreadAlarmTrigger,
+        prompt: String,
+        delivery: AlarmDelivery,
+    ) -> Result<ThreadAlarm, String> {
+        self.codex
+            .session
+            .create_alarm(trigger, prompt, delivery)
+            .await
+    }
+
+    pub async fn delete_alarm(&self, id: &str) -> Result<bool, String> {
+        self.codex.session.delete_alarm(id).await
+    }
+
+    pub async fn list_alarms(&self) -> Vec<ThreadAlarm> {
+        self.codex.session.list_alarms().await
     }
 }
 

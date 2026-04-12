@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/alarms.rs
+assertion_line: 102
+expression: popup
+---
+  Thread alarms
+
+› 1. at Apr 7, 2026 10:57 AM • one-shot  tell me to take a piss
+  2. weekdays at 5:00 PM                 wrap up for the day
+
+  Press enter to confirm or esc to go back
