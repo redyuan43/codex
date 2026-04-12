@@ -482,8 +482,10 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     // Current status header shown in the status indicator.
     current_status_header: String,
-    // Best-effort one-line summary of the current or last task, shown in the empty composer.
-    live_task_summary: Option<String>,
+    // Stable session-level task summary derived from substantive user requests.
+    session_context_anchor: Option<String>,
+    // Best-effort one-line summary of the current execution stage.
+    live_stage_summary: Option<String>,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
@@ -720,6 +722,12 @@ impl ChatWidget {
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
         self.restore_reasoning_status_header();
+        if self.current_status_header == "Working" {
+            self.set_live_stage_summary(None);
+        } else {
+            let header = self.current_status_header.clone();
+            self.update_live_stage_summary_from_header(&header);
+        }
     }
 
     fn flush_answer_stream_with_separator(&mut self) {
@@ -738,20 +746,56 @@ impl ChatWidget {
         self.bottom_pane.update_status(header, details);
     }
 
-    fn set_live_task_summary(&mut self, summary: Option<String>) {
-        let normalized = summary.and_then(|summary| normalize_live_task_summary(&summary));
-        if self.live_task_summary == normalized {
-            return;
-        }
-        self.live_task_summary = normalized.clone();
-        self.bottom_pane.set_live_placeholder_summary(normalized);
+    fn sync_runtime_placeholder_summary(&mut self) {
+        let summary = match (&self.session_context_anchor, &self.live_stage_summary) {
+            (Some(anchor), Some(stage)) => Some(format!("{anchor} · {stage}")),
+            (Some(anchor), None) => Some(anchor.clone()),
+            (None, Some(stage)) => Some(stage.clone()),
+            (None, None) => None,
+        };
+        self.bottom_pane.set_live_placeholder_summary(summary);
     }
 
-    fn update_live_task_summary_from_header(&mut self, header: &str) {
+    fn set_session_context_anchor(&mut self, anchor: Option<String>) {
+        let normalized = anchor.and_then(|anchor| normalize_summary_line(&anchor));
+        if self.session_context_anchor == normalized {
+            return;
+        }
+        self.session_context_anchor = normalized;
+        self.sync_runtime_placeholder_summary();
+    }
+
+    fn maybe_seed_session_context_anchor(&mut self, message: &str) {
+        if self.session_context_anchor.is_some() {
+            return;
+        }
+        if !is_substantive_session_anchor_candidate(message) {
+            return;
+        }
+        self.set_session_context_anchor(Some(message.to_string()));
+    }
+
+    fn update_session_context_anchor_from_replay(&mut self, message: &str) {
+        if !is_substantive_session_anchor_candidate(message) {
+            return;
+        }
+        self.set_session_context_anchor(Some(message.to_string()));
+    }
+
+    fn set_live_stage_summary(&mut self, summary: Option<String>) {
+        let normalized = summary.and_then(|summary| normalize_summary_line(&summary));
+        if self.live_stage_summary == normalized {
+            return;
+        }
+        self.live_stage_summary = normalized;
+        self.sync_runtime_placeholder_summary();
+    }
+
+    fn update_live_stage_summary_from_header(&mut self, header: &str) {
         if header == "Working" {
             return;
         }
-        self.set_live_task_summary(Some(header.to_string()));
+        self.set_live_stage_summary(Some(header.to_string()));
     }
 
     /// Convenience wrapper around [`Self::set_status`];
@@ -770,6 +814,8 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
+        self.set_session_context_anchor(None);
+        self.set_live_stage_summary(None);
         self.set_skills(None);
         self.bottom_pane.set_connectors_snapshot(None);
         self.thread_id = Some(event.session_id);
@@ -900,7 +946,7 @@ impl ChatWidget {
             // Update the shimmer header to the extracted reasoning chunk header.
             self.set_status_header(header);
             let header = self.current_status_header.clone();
-            self.update_live_task_summary_from_header(&header);
+            self.update_live_stage_summary_from_header(&header);
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
@@ -939,7 +985,7 @@ impl ChatWidget {
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(String::from("Working"));
-        self.set_live_task_summary(None);
+        self.set_live_stage_summary(None);
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -957,6 +1003,7 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.clear_unified_exec_processes();
+        self.set_live_stage_summary(None);
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -1233,7 +1280,7 @@ impl ChatWidget {
                 };
                 self.set_status_header(header);
                 let header = self.current_status_header.clone();
-                self.update_live_task_summary_from_header(&header);
+                self.update_live_stage_summary_from_header(&header);
             }
         }
         self.request_redraw();
@@ -1257,6 +1304,7 @@ impl ChatWidget {
 
         self.mcp_startup_status = None;
         self.update_task_running_state();
+        self.set_live_stage_summary(None);
         self.maybe_send_next_queued_input();
         self.request_redraw();
     }
@@ -1435,7 +1483,7 @@ impl ChatWidget {
             };
             self.set_status_header(header);
             let header = self.current_status_header.clone();
-            self.update_live_task_summary_from_header(&header);
+            self.update_live_stage_summary_from_header(&header);
             match &mut self.unified_exec_wait_streak {
                 Some(wait) if wait.process_id == ev.process_id => {
                     wait.update_command_display(command_display);
@@ -1645,7 +1693,7 @@ impl ChatWidget {
         self.bottom_pane.set_interrupt_hint_visible(true);
         self.set_status_header(message);
         let header = self.current_status_header.clone();
-        self.update_live_task_summary_from_header(&header);
+        self.update_live_stage_summary_from_header(&header);
     }
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
@@ -2107,7 +2155,8 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
-            live_task_summary: None,
+            session_context_anchor: None,
+            live_stage_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -2246,7 +2295,8 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
-            live_task_summary: None,
+            session_context_anchor: None,
+            live_stage_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -2374,7 +2424,8 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
-            live_task_summary: None,
+            session_context_anchor: None,
+            live_stage_summary: None,
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
@@ -2947,6 +2998,7 @@ impl ChatWidget {
             });
             return;
         }
+        self.maybe_seed_session_context_anchor(&text);
 
         for image in &local_images {
             items.push(UserInput::LocalImage {
@@ -3263,6 +3315,7 @@ impl ChatWidget {
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         if !event.message.trim().is_empty() {
+            self.update_session_context_anchor_from_replay(&event.message);
             self.add_to_history(history_cell::new_user_prompt(
                 event.message,
                 event.text_elements,
@@ -5885,7 +5938,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
     None
 }
 
-fn normalize_live_task_summary(summary: &str) -> Option<String> {
+fn normalize_summary_line(summary: &str) -> Option<String> {
     let normalized = summary.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
@@ -5893,6 +5946,52 @@ fn normalize_live_task_summary(summary: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn is_substantive_session_anchor_candidate(message: &str) -> bool {
+    let Some(normalized) = normalize_summary_line(message) else {
+        return false;
+    };
+    if normalized.len() < 12 {
+        return false;
+    }
+
+    let lower = normalized.to_ascii_lowercase();
+    let exact_short_follow_ups = [
+        "continue",
+        "继续",
+        "fix it",
+        "修一下",
+        "push to fork",
+        "提交到 fork",
+        "提交到我的fork",
+        "提交到我自己的fork",
+        "好的",
+        "ok",
+        "okay",
+    ];
+    if exact_short_follow_ups.contains(&lower.as_str()) {
+        return false;
+    }
+
+    let operational_prefixes = [
+        "continue ",
+        "继续",
+        "push ",
+        "提交 ",
+        "commit ",
+        "open pr",
+        "create pr",
+    ];
+    if normalized.len() <= 24
+        && operational_prefixes
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+    {
+        return false;
+    }
+
+    true
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {

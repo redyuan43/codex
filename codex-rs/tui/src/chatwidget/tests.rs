@@ -819,7 +819,8 @@ async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),
-        live_task_summary: None,
+        session_context_anchor: None,
+        live_stage_summary: None,
         retry_status_header: None,
         thread_id: None,
         forked_from: None,
@@ -3995,7 +3996,7 @@ async fn reasoning_header_updates_live_placeholder_summary() {
     });
 
     assert_eq!(
-        chat.live_task_summary.as_deref(),
+        chat.live_stage_summary.as_deref(),
         Some("Investigating render path")
     );
 }
@@ -4011,12 +4012,16 @@ async fn background_event_populates_live_placeholder_without_reasoning() {
         }),
     });
 
-    assert_eq!(chat.live_task_summary.as_deref(), Some("Waiting for `vim`"));
+    assert_eq!(
+        chat.live_stage_summary.as_deref(),
+        Some("Waiting for `vim`")
+    );
 }
 
 #[tokio::test]
-async fn live_placeholder_persists_after_turn_complete_and_clears_on_next_turn() {
+async fn anchor_persists_after_turn_complete_and_stage_clears() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_session_context_anchor(Some("Fix flaky TUI snapshots".to_string()));
 
     chat.handle_codex_event(Event {
         id: "task-1".into(),
@@ -4038,18 +4043,52 @@ async fn live_placeholder_persists_after_turn_complete_and_clears_on_next_turn()
     });
 
     assert_eq!(
-        chat.live_task_summary.as_deref(),
-        Some("Tracing failing snapshots")
+        chat.session_context_anchor.as_deref(),
+        Some("Fix flaky TUI snapshots")
     );
+    assert_eq!(chat.live_stage_summary, None);
+}
 
-    chat.handle_codex_event(Event {
-        id: "task-2".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            model_context_window: None,
-        }),
+#[tokio::test]
+async fn replay_uses_latest_substantive_user_message_as_anchor() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.on_user_message_event(UserMessageEvent {
+        message: "Implement live session summaries in the composer".to_string(),
+        images: None,
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
+    });
+    chat.on_user_message_event(UserMessageEvent {
+        message: "提交到 fork".to_string(),
+        images: None,
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
+    });
+    chat.on_user_message_event(UserMessageEvent {
+        message: "Refine summary behavior to preserve main task context".to_string(),
+        images: None,
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
     });
 
-    assert_eq!(chat.live_task_summary, None);
+    assert_eq!(
+        chat.session_context_anchor.as_deref(),
+        Some("Refine summary behavior to preserve main task context")
+    );
+}
+
+#[tokio::test]
+async fn short_operational_follow_up_does_not_override_anchor() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.maybe_seed_session_context_anchor("Implement live session summaries in the composer");
+    chat.maybe_seed_session_context_anchor("提交到 fork");
+
+    assert_eq!(
+        chat.session_context_anchor.as_deref(),
+        Some("Implement live session summaries in the composer")
+    );
 }
 
 #[tokio::test]
