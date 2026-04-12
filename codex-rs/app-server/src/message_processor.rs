@@ -299,7 +299,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(
-        &self,
+        &mut self,
         connection_id: ConnectionId,
         request: JSONRPCRequest,
         transport: AppServerTransport,
@@ -373,7 +373,7 @@ impl MessageProcessor {
     /// This bypasses JSON request deserialization but keeps identical request
     /// semantics by delegating to `handle_client_request`.
     pub(crate) async fn process_client_request(
-        &self,
+        &mut self,
         connection_id: ConnectionId,
         request: ClientRequest,
         session: &mut ConnectionSessionState,
@@ -525,7 +525,7 @@ impl MessageProcessor {
     }
 
     async fn handle_client_request(
-        &self,
+        &mut self,
         connection_request_id: ConnectionRequestId,
         codex_request: ClientRequest,
         session: &mut ConnectionSessionState,

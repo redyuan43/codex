@@ -28,6 +28,8 @@ pub mod config_loader;
 pub mod connectors;
 mod context_manager;
 mod contextual_user_message;
+mod alarm_trigger;
+pub mod alarms;
 mod environment_context;
 pub mod exec;
 pub mod exec_env;

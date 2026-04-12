@@ -107,6 +107,8 @@ pub struct ToolsConfig {
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
+    pub request_user_input: bool,
+    pub alarm_scheduler: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
@@ -146,6 +148,8 @@ impl ToolsConfig {
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
+        let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
+        let include_alarm_scheduler = features.enabled(Feature::AlarmScheduler);
         let include_default_mode_request_user_input =
             features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
@@ -228,6 +232,8 @@ impl ToolsConfig {
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
+            request_user_input: include_request_user_input,
+            alarm_scheduler: include_alarm_scheduler,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,

@@ -250,6 +250,7 @@ macro_rules! assert_chatwidget_snapshot {
     }};
 }
 
+mod alarms;
 mod app_server;
 mod approval_requests;
 mod background_events;

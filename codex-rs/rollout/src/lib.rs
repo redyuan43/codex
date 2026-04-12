@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use codex_protocol::protocol::SessionSource;
 
+mod alarm_sidecar;
 pub(crate) mod config;
 pub(crate) mod list;
 pub(crate) mod metadata;

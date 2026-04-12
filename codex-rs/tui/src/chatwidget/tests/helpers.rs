@@ -245,6 +245,7 @@ pub(super) async fn make_chatwidget_manual(
         suppress_queue_autosend: false,
         thread_id: None,
         last_turn_id: None,
+        thread_alarms: Vec::new(),
         thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),

@@ -113,6 +113,14 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
+            SlashCommand::Loop => {
+                let Some(thread_id) = self.thread_id else {
+                    self.add_error_message("No active thread is available.".to_string());
+                    return;
+                };
+                self.app_event_tx
+                    .send(AppEvent::OpenThreadAlarms { thread_id });
+            }
             SlashCommand::Rename => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
