@@ -1836,8 +1836,8 @@ impl ChatWidget {
             &self.live_stage_summary,
             &self.recent_progress_summary,
         ) {
-            (Some(anchor), Some(stage), _) => Some(format!("{anchor} · {stage}")),
-            (Some(anchor), None, Some(progress)) => Some(format!("{anchor} · {progress}")),
+            (Some(anchor), Some(stage), _) => Some(format!("{stage} · {anchor}")),
+            (Some(anchor), None, Some(progress)) => Some(format!("{progress} · {anchor}")),
             (Some(anchor), None, None) => Some(anchor.clone()),
             (None, Some(stage), _) => Some(stage.clone()),
             (None, None, Some(progress)) => Some(progress.clone()),
