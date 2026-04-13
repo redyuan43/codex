@@ -1,0 +1,19 @@
+---
+source: tui/src/oss_selection.rs
+assertion_line: 425
+expression: terminal.backend()
+---
+? Select an open-source provider
+
+  Choose which local AI server to use for your session.
+
+  ○ LM Studio
+  ● Ollama (Responses)
+  ● llama.cpp
+
+  ● Running  ○ Not Running
+
+  Press Enter to select • Ctrl+C to exit
+ Select provider?
+  LM Studio   Ollama   llama.cpp 
+  Local LM Studio server (default port 1234)

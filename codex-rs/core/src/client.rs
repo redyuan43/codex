@@ -111,6 +111,8 @@ use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::provider_auth::auth_manager_for_provider;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
+use codex_model_provider_info::LLAMACPP_OSS_PROVIDER_ID;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_protocol::error::CodexErr;
@@ -147,6 +149,7 @@ struct ModelClientState {
     conversation_id: ThreadId,
     window_generation: AtomicU64,
     installation_id: String,
+    provider_id: String,
     provider: ModelProviderInfo,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
@@ -300,6 +303,7 @@ impl ModelClient {
         auth_manager: Option<Arc<AuthManager>>,
         conversation_id: ThreadId,
         installation_id: String,
+        provider_id: String,
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
@@ -318,6 +322,7 @@ impl ModelClient {
                 conversation_id,
                 window_generation: AtomicU64::new(0),
                 installation_id,
+                provider_id,
                 provider,
                 auth_env_telemetry,
                 session_source,
@@ -865,6 +870,7 @@ impl ModelClientSession {
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
+            previous_response_id: None,
             input,
             tools,
             tool_choice: "auto".to_string(),
@@ -931,8 +937,10 @@ impl ModelClientSession {
         let previous_request = self.websocket_session.last_request.as_ref()?;
         let mut previous_without_input = previous_request.clone();
         previous_without_input.input.clear();
+        previous_without_input.previous_response_id = None;
         let mut request_without_input = request.clone();
         request_without_input.input.clear();
+        request_without_input.previous_response_id = None;
         if previous_without_input != request_without_input {
             trace!(
                 "incremental request failed, properties didn't match {previous_without_input:?} != {request_without_input:?}"
@@ -957,13 +965,15 @@ impl ModelClientSession {
     }
 
     fn get_last_response(&mut self) -> Option<LastResponse> {
-        self.websocket_session
-            .last_response_rx
-            .take()
-            .and_then(|mut receiver| match receiver.try_recv() {
-                Ok(last_response) => Some(last_response),
-                Err(TryRecvError::Closed) | Err(TryRecvError::Empty) => None,
-            })
+        let mut receiver = self.websocket_session.last_response_rx.take()?;
+        match receiver.try_recv() {
+            Ok(last_response) => Some(last_response),
+            Err(TryRecvError::Closed) => None,
+            Err(TryRecvError::Empty) => {
+                self.websocket_session.last_response_rx = Some(receiver);
+                None
+            }
+        }
     }
 
     fn prepare_websocket_request(
@@ -992,6 +1002,38 @@ impl ModelClientSession {
             input: incremental_items,
             ..payload
         })
+    }
+
+    fn prepare_incremental_http_request(
+        &mut self,
+        mut request: ResponsesApiRequest,
+    ) -> ResponsesApiRequest {
+        if matches!(
+            self.client.state.provider_id.as_str(),
+            LMSTUDIO_OSS_PROVIDER_ID | LLAMACPP_OSS_PROVIDER_ID
+        ) {
+            return request;
+        }
+
+        let Some(last_response) = self.get_last_response() else {
+            return request;
+        };
+        let Some(incremental_items) = self.get_incremental_items(
+            &request,
+            Some(&last_response),
+            /*allow_empty_delta*/ false,
+        ) else {
+            return request;
+        };
+
+        if last_response.response_id.is_empty() {
+            trace!("incremental HTTP request failed, no previous response id");
+            return request;
+        }
+
+        request.previous_response_id = Some(last_response.response_id);
+        request.input = incremental_items;
+        request
     }
 
     /// Opportunistically preconnects a websocket for this turn-scoped client session.
@@ -1141,7 +1183,7 @@ impl ModelClientSession {
         )
     )]
     async fn stream_responses_api(
-        &self,
+        &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1191,17 +1233,21 @@ impl ModelClientSession {
                 summary,
                 service_tier,
             )?;
+            let request_to_send = self.prepare_incremental_http_request(request.clone());
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let stream_result = client.stream_request(request_to_send, options).await;
 
             match stream_result {
                 Ok(stream) => {
-                    let (stream, _) = map_response_stream(stream, session_telemetry.clone());
+                    self.websocket_session.last_request = Some(request);
+                    let (stream, last_request_rx) =
+                        map_response_stream(stream, session_telemetry.clone());
+                    self.websocket_session.last_response_rx = Some(last_request_rx);
                     return Ok(stream);
                 }
                 Err(ApiError::Transport(

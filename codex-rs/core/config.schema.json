@@ -332,6 +332,9 @@
           "default": null,
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
+            "alarm_tool": {
+              "type": "boolean"
+            },
             "apply_patch_freeform": {
               "type": "boolean"
             },
@@ -2134,6 +2137,9 @@
       "default": null,
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
+        "alarm_tool": {
+          "type": "boolean"
+        },
         "apply_patch_freeform": {
           "type": "boolean"
         },
@@ -2530,7 +2536,7 @@
       "type": "string"
     },
     "oss_provider": {
-      "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
+      "description": "Preferred OSS provider for local models, e.g. \"llamacpp\", \"lmstudio\", or \"ollama\".",
       "type": "string"
     },
     "otel": {

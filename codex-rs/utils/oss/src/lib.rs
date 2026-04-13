@@ -1,12 +1,14 @@
 //! OSS provider utilities shared between TUI and exec.
 
 use codex_core::config::Config;
+use codex_model_provider_info::LLAMACPP_OSS_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 
 /// Returns the default model for a given OSS provider.
 pub fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static str> {
     match provider_id {
+        LLAMACPP_OSS_PROVIDER_ID => None,
         LMSTUDIO_OSS_PROVIDER_ID => Some(codex_lmstudio::DEFAULT_OSS_MODEL),
         OLLAMA_OSS_PROVIDER_ID => Some(codex_ollama::DEFAULT_OSS_MODEL),
         _ => None,
@@ -19,6 +21,11 @@ pub async fn ensure_oss_provider_ready(
     config: &Config,
 ) -> Result<(), std::io::Error> {
     match provider_id {
+        LLAMACPP_OSS_PROVIDER_ID => {
+            codex_llamacpp::ensure_oss_ready(config)
+                .await
+                .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
+        }
         LMSTUDIO_OSS_PROVIDER_ID => {
             codex_lmstudio::ensure_oss_ready(config)
                 .await
@@ -40,6 +47,12 @@ pub async fn ensure_oss_provider_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_get_default_model_for_provider_llamacpp() {
+        let result = get_default_model_for_oss_provider(LLAMACPP_OSS_PROVIDER_ID);
+        assert_eq!(result, None);
+    }
 
     #[test]
     fn test_get_default_model_for_provider_lmstudio() {

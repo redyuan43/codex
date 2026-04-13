@@ -44,6 +44,7 @@ use codex_config::types::Tui;
 use codex_config::types::TuiNotificationSettings;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_model_provider_info::LLAMACPP_OSS_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
@@ -5207,6 +5208,11 @@ fn test_set_default_oss_provider() -> std::io::Result<()> {
     let content = std::fs::read_to_string(&config_path)?;
     assert!(content.contains("oss_provider = \"ollama\""));
     assert!(!content.contains("oss_provider = \"lmstudio\""));
+
+    set_default_oss_provider(codex_home, LLAMACPP_OSS_PROVIDER_ID)?;
+    let content = std::fs::read_to_string(&config_path)?;
+    assert!(content.contains("oss_provider = \"llamacpp\""));
+    assert!(!content.contains("oss_provider = \"ollama\""));
 
     // Test invalid provider
     let result = set_default_oss_provider(codex_home, "invalid_provider");

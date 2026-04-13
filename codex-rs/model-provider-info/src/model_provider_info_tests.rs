@@ -177,3 +177,12 @@ refresh_interval_ms = 0
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
 }
+
+#[test]
+fn built_in_model_providers_include_llamacpp() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+    assert_eq!(
+        providers[LLAMACPP_OSS_PROVIDER_ID].base_url.as_deref(),
+        Some("http://localhost:8080/v1")
+    );
+}

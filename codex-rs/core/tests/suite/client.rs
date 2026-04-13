@@ -8,6 +8,8 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
+use codex_model_provider_info::LLAMACPP_OSS_PROVIDER_ID;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
@@ -879,6 +881,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         ))),
         conversation_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        /*provider_id*/ "openai".to_string(),
         provider,
         SessionSource::Exec,
         config.model_verbosity,
@@ -2157,6 +2160,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*auth_manager*/ None,
         conversation_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        /*provider_id*/ "openai".to_string(),
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
@@ -2858,12 +2862,350 @@ fn create_dummy_codex_auth() -> CodexAuth {
     CodexAuth::create_dummy_chatgpt_auth_for_testing()
 }
 
+fn http_responses_provider(server: &MockServer) -> ModelProviderInfo {
+    ModelProviderInfo {
+        name: "custom-http-responses".to_string(),
+        base_url: Some(server.uri()),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        auth: None,
+        query_params: None,
+        wire_api: WireApi::Responses,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_http_uses_previous_response_id_when_prefix_after_completed() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let first = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("assistant", "A1"),
+        ev_completed("resp-1"),
+    ]);
+    let second = sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]);
+    let request_log = mount_sse_sequence(&server, vec![first, second]).await;
+
+    let provider = http_responses_provider(&server);
+    let codex = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body_json().get("previous_response_id"), None);
+    assert_eq!(
+        requests[1]
+            .body_json()
+            .get("previous_response_id")
+            .and_then(|value| value.as_str()),
+        Some("resp-1")
+    );
+    assert_eq!(
+        requests[1].body_json()["input"],
+        json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type":"input_text","text":"U2"}]
+        }])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_http_does_not_use_previous_response_id_when_non_input_fields_change() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let first = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("assistant", "A1"),
+        ev_completed("resp-1"),
+    ]);
+    let second = sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]);
+    let request_log = mount_sse_sequence(&server, vec![first, second]).await;
+
+    let provider = http_responses_provider(&server);
+    let codex = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: Some(json!({
+                "type": "object",
+                "properties": { "answer": { "type": "string" } },
+                "required": ["answer"],
+            })),
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].body_json().get("previous_response_id"), None);
+    let second_input = requests[1]
+        .body_json()
+        .get("input")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("second request missing input");
+    assert!(
+        second_input.len() >= 3,
+        "expected full transcript in follow-up request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_http_does_not_use_previous_response_id_after_incomplete_response() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let incomplete = sse_failed(
+        "resp-1",
+        "server_error",
+        "stream disconnected before completion",
+    );
+    let second = sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]);
+    let request_log = mount_sse_sequence(&server, vec![incomplete, second]).await;
+
+    let provider = http_responses_provider(&server);
+    let codex = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].body_json().get("previous_response_id"), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lmstudio_http_skips_previous_response_id_and_relies_on_full_prompt() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let first = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("assistant", "A1"),
+        ev_completed("resp-1"),
+    ]);
+    let second = sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]);
+    let request_log = mount_sse_sequence(&server, vec![first, second]).await;
+
+    let provider = http_responses_provider(&server);
+    let codex = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider_id = LMSTUDIO_OSS_PROVIDER_ID.to_string();
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].body_json().get("previous_response_id"), None);
+    let second_input = requests[1]
+        .body_json()
+        .get("input")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("second request missing input");
+    assert!(
+        second_input.len() >= 3,
+        "expected full transcript for lmstudio follow-up request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn llamacpp_http_skips_previous_response_id_and_relies_on_full_prompt() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let first = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("assistant", "A1"),
+        ev_completed("resp-1"),
+    ]);
+    let second = sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]);
+    let request_log = mount_sse_sequence(&server, vec![first, second]).await;
+
+    let provider = http_responses_provider(&server);
+    let codex = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider_id = LLAMACPP_OSS_PROVIDER_ID.to_string();
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].body_json().get("previous_response_id"), None);
+    let second_input = requests[1]
+        .body_json()
+        .get("input")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .expect("second request missing input");
+    assert!(
+        second_input.len() >= 3,
+        "expected full transcript for llama.cpp follow-up request"
+    );
+}
+
 /// Scenario:
 /// - Turn 1: user sends U1; model streams deltas then a final assistant message A.
 /// - Turn 2: user sends U2; model streams a delta then the same final assistant message A.
 /// - Turn 3: user sends U3; model responds (same SSE again, not important).
 ///
-/// We assert that the `input` sent on each turn contains the expected conversation history
+/// We assert that the `input` sent on each turn does not duplicate streamed assistant messages and
+/// that later turns can reuse the prior response id.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Skip under Codex sandbox network restrictions (mirrors other tests).
@@ -2946,47 +3288,36 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         assert_eq!(request.path(), "/v1/responses");
     }
 
-    // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.
-    let r3_tail_expected = json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type":"input_text","text":"U1"}]
-        },
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type":"output_text","text":"Hey there!\n"}]
-        },
-        {
+    assert_eq!(
+        requests[1]
+            .body_json()
+            .get("previous_response_id")
+            .and_then(|value| value.as_str()),
+        Some("resp1")
+    );
+    assert_eq!(
+        requests[1].body_json()["input"],
+        json!([{
             "type": "message",
             "role": "user",
             "content": [{"type":"input_text","text":"U2"}]
-        },
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type":"output_text","text":"Hey there!\n"}]
-        },
-        {
+        }]),
+        "request 2 should only send the incremental user message",
+    );
+    assert_eq!(
+        requests[2]
+            .body_json()
+            .get("previous_response_id")
+            .and_then(|value| value.as_str()),
+        Some("resp1")
+    );
+    assert_eq!(
+        requests[2].body_json()["input"],
+        json!([{
             "type": "message",
             "role": "user",
             "content": [{"type":"input_text","text":"U3"}]
-        }
-    ]);
-
-    let r3_input_array = requests[2]
-        .body_json()
-        .get("input")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .expect("r3 missing input array");
-    // skipping earlier context and developer messages
-    let tail_len = r3_tail_expected.as_array().unwrap().len();
-    let actual_tail = &r3_input_array[r3_input_array.len() - tail_len..];
-    assert_eq!(
-        serde_json::Value::Array(actual_tail.to_vec()),
-        r3_tail_expected,
-        "request 3 tail mismatch",
+        }]),
+        "request 3 should only send the incremental user message",
     );
 }

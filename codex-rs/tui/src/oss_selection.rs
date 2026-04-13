@@ -2,10 +2,10 @@ use std::io;
 use std::sync::LazyLock;
 
 use codex_core::config::set_default_oss_provider;
-use codex_model_provider_info::DEFAULT_LMSTUDIO_PORT;
-use codex_model_provider_info::DEFAULT_OLLAMA_PORT;
+use codex_model_provider_info::LLAMACPP_OSS_PROVIDER_ID;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+use codex_model_provider_info::built_in_model_providers;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -74,6 +74,12 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
             key: KeyCode::Char('o'),
             provider_id: OLLAMA_OSS_PROVIDER_ID,
         },
+        SelectOption {
+            label: Line::from(vec!["ll".into(), "a".underlined(), "ma.cpp".into()]),
+            description: "Local llama.cpp server (Responses API, default port 8080)",
+            key: KeyCode::Char('a'),
+            provider_id: LLAMACPP_OSS_PROVIDER_ID,
+        },
     ]
 });
 
@@ -92,7 +98,11 @@ pub struct OssSelectionWidget<'a> {
 }
 
 impl OssSelectionWidget<'_> {
-    fn new(lmstudio_status: ProviderStatus, ollama_status: ProviderStatus) -> io::Result<Self> {
+    fn new(
+        lmstudio_status: ProviderStatus,
+        ollama_status: ProviderStatus,
+        llamacpp_status: ProviderStatus,
+    ) -> io::Result<Self> {
         let providers = vec![
             ProviderOption {
                 name: "LM Studio".to_string(),
@@ -100,11 +110,11 @@ impl OssSelectionWidget<'_> {
             },
             ProviderOption {
                 name: "Ollama (Responses)".to_string(),
-                status: ollama_status.clone(),
+                status: ollama_status,
             },
             ProviderOption {
-                name: "Ollama (Chat)".to_string(),
-                status: ollama_status,
+                name: "llama.cpp".to_string(),
+                status: llamacpp_status,
             },
         ];
 
@@ -291,23 +301,24 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
     // Check provider statuses first
     let lmstudio_status = check_lmstudio_status().await;
     let ollama_status = check_ollama_status().await;
+    let llamacpp_status = check_llamacpp_status().await;
 
-    // Autoselect if only one is running
-    match (&lmstudio_status, &ollama_status) {
-        (ProviderStatus::Running, ProviderStatus::NotRunning) => {
-            let provider = LMSTUDIO_OSS_PROVIDER_ID.to_string();
-            return Ok(provider);
-        }
-        (ProviderStatus::NotRunning, ProviderStatus::Running) => {
-            let provider = OLLAMA_OSS_PROVIDER_ID.to_string();
-            return Ok(provider);
-        }
-        _ => {
-            // Both running or both not running - show UI
-        }
+    let running_providers = [
+        (&lmstudio_status, LMSTUDIO_OSS_PROVIDER_ID),
+        (&ollama_status, OLLAMA_OSS_PROVIDER_ID),
+        (&llamacpp_status, LLAMACPP_OSS_PROVIDER_ID),
+    ]
+    .into_iter()
+    .filter_map(|(status, provider_id)| match status {
+        ProviderStatus::Running => Some(provider_id),
+        ProviderStatus::NotRunning | ProviderStatus::Unknown => None,
+    })
+    .collect::<Vec<_>>();
+    if running_providers.len() == 1 {
+        return Ok(running_providers[0].to_string());
     }
 
-    let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
+    let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status, llamacpp_status)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -343,7 +354,7 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
 }
 
 async fn check_lmstudio_status() -> ProviderStatus {
-    match check_port_status(DEFAULT_LMSTUDIO_PORT).await {
+    match check_provider_status(LMSTUDIO_OSS_PROVIDER_ID).await {
         Ok(true) => ProviderStatus::Running,
         Ok(false) => ProviderStatus::NotRunning,
         Err(_) => ProviderStatus::Unknown,
@@ -351,23 +362,66 @@ async fn check_lmstudio_status() -> ProviderStatus {
 }
 
 async fn check_ollama_status() -> ProviderStatus {
-    match check_port_status(DEFAULT_OLLAMA_PORT).await {
+    match check_provider_status(OLLAMA_OSS_PROVIDER_ID).await {
         Ok(true) => ProviderStatus::Running,
         Ok(false) => ProviderStatus::NotRunning,
         Err(_) => ProviderStatus::Unknown,
     }
 }
 
-async fn check_port_status(port: u16) -> io::Result<bool> {
+async fn check_llamacpp_status() -> ProviderStatus {
+    match check_provider_status(LLAMACPP_OSS_PROVIDER_ID).await {
+        Ok(true) => ProviderStatus::Running,
+        Ok(false) => ProviderStatus::NotRunning,
+        Err(_) => ProviderStatus::Unknown,
+    }
+}
+
+async fn check_provider_status(provider_id: &str) -> io::Result<bool> {
+    let mut providers = built_in_model_providers(/*openai_base_url*/ None);
+    let provider = providers
+        .remove(provider_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "provider not found"))?;
+    let base_url = provider.base_url.ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "provider must have a base_url")
+    })?;
+    check_base_url_status(&base_url).await
+}
+
+async fn check_base_url_status(base_url: &str) -> io::Result<bool> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
         .map_err(io::Error::other)?;
 
-    let url = format!("http://localhost:{port}");
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
 
     match client.get(&url).send().await {
         Ok(response) => Ok(response.status().is_success()),
         Err(_) => Ok(false), // Connection failed = not running
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_backend::VT100Backend;
+
+    #[test]
+    fn oss_selection_widget_renders_snapshot() {
+        let widget = OssSelectionWidget::new(
+            ProviderStatus::NotRunning,
+            ProviderStatus::Running,
+            ProviderStatus::Running,
+        )
+        .expect("create widget");
+
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 72, /*height*/ 14)).expect("terminal");
+        terminal
+            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        insta::assert_snapshot!(terminal.backend());
     }
 }
