@@ -2348,6 +2348,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-llamacpp"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-model-provider-info",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-lmstudio"
 version = "0.0.0"
 dependencies = [
@@ -3125,6 +3138,7 @@ name = "codex-utils-oss"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-llamacpp",
  "codex-lmstudio",
  "codex-model-provider-info",
  "codex-ollama",

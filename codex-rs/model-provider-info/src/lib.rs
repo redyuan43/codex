@@ -312,7 +312,9 @@ impl ModelProviderInfo {
 
 pub const DEFAULT_LMSTUDIO_PORT: u16 = 1234;
 pub const DEFAULT_OLLAMA_PORT: u16 = 11434;
+pub const DEFAULT_LLAMACPP_PORT: u16 = 8080;
 
+pub const LLAMACPP_OSS_PROVIDER_ID: &str = "llamacpp";
 pub const LMSTUDIO_OSS_PROVIDER_ID: &str = "lmstudio";
 pub const OLLAMA_OSS_PROVIDER_ID: &str = "ollama";
 
@@ -332,6 +334,10 @@ pub fn built_in_model_providers(
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
+        ),
+        (
+            LLAMACPP_OSS_PROVIDER_ID,
+            create_oss_provider(DEFAULT_LLAMACPP_PORT, WireApi::Responses),
         ),
         (
             LMSTUDIO_OSS_PROVIDER_ID,

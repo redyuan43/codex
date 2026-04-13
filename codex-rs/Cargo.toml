@@ -40,6 +40,7 @@ members = [
     "keyring-store",
     "file-search",
     "linux-sandbox",
+    "llamacpp",
     "lmstudio",
     "login",
     "codex-mcp",
@@ -144,6 +145,7 @@ codex-hooks = { path = "hooks" }
 codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
+codex-llamacpp = { path = "llamacpp" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-mcp = { path = "codex-mcp" }
