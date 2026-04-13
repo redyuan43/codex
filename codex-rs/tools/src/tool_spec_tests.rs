@@ -7,6 +7,7 @@ use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
 use crate::ResponsesApiTool;
+use crate::create_function_tools_json_for_responses_api;
 use crate::create_tools_json_for_responses_api;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
@@ -148,6 +149,51 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
             output_schema: None,
         })])
         .expect("serialize tools"),
+        vec![json!({
+            "type": "function",
+            "name": "demo",
+            "description": "A demo tool",
+            "strict": false,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "foo": { "type": "string" }
+                },
+            },
+        })]
+    );
+}
+
+#[test]
+fn create_function_tools_json_for_responses_api_filters_non_function_tools() {
+    assert_eq!(
+        create_function_tools_json_for_responses_api(&[
+            ToolSpec::LocalShell {},
+            ToolSpec::Function(ResponsesApiTool {
+                name: "demo".to_string(),
+                description: "A demo tool".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: JsonSchema::object(
+                    BTreeMap::from([
+                        ("foo".to_string(), JsonSchema::string(/*description*/ None),)
+                    ]),
+                    /*required*/ None,
+                    /*additional_properties*/ None
+                ),
+                output_schema: None,
+            }),
+            ToolSpec::Freeform(FreeformTool {
+                name: "exec".to_string(),
+                description: "Run a command".to_string(),
+                format: FreeformToolFormat {
+                    r#type: "grammar".to_string(),
+                    syntax: "lark".to_string(),
+                    definition: "start: \"exec\"".to_string(),
+                },
+            }),
+        ])
+        .expect("serialize function-only tools"),
         vec![json!({
             "type": "function",
             "name": "demo",

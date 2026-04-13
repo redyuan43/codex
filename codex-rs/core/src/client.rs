@@ -76,6 +76,8 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_tools::ToolSpec;
+use codex_tools::create_function_tools_json_for_responses_api;
 use codex_tools::create_tools_json_for_responses_api;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -444,7 +446,7 @@ impl ModelClient {
 
         let instructions = prompt.base_instructions.text.clone();
         let input = prompt.get_formatted_input();
-        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        let tools = create_responses_api_tools_json(&self.state.provider_id, &prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let verbosity = if model_info.support_verbosity {
             self.state.model_verbosity.or(model_info.default_verbosity)
@@ -804,6 +806,17 @@ impl ModelClient {
     }
 }
 
+fn create_responses_api_tools_json(
+    provider_id: &str,
+    tools: &[ToolSpec],
+) -> std::result::Result<Vec<serde_json::Value>, serde_json::Error> {
+    if provider_id == LLAMACPP_OSS_PROVIDER_ID {
+        create_function_tools_json_for_responses_api(tools)
+    } else {
+        create_tools_json_for_responses_api(tools)
+    }
+}
+
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
         let websocket_session = std::mem::take(&mut self.websocket_session);
@@ -832,7 +845,7 @@ impl ModelClientSession {
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
         let input = prompt.get_formatted_input();
-        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+        let tools = create_responses_api_tools_json(&self.client.state.provider_id, &prompt.tools)?;
         let default_reasoning_effort = model_info.default_reasoning_level;
         let reasoning = if model_info.supports_reasoning_summaries {
             Some(Reasoning {

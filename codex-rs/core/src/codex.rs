@@ -2043,6 +2043,7 @@ impl Session {
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
                 installation_id,
+                config.model_provider_id.clone(),
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
