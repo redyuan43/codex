@@ -143,6 +143,24 @@ impl ConfiguredToolSpec {
 pub fn create_tools_json_for_responses_api(
     tools: &[ToolSpec],
 ) -> Result<Vec<Value>, serde_json::Error> {
+    serialize_tools_json_for_responses_api(tools.iter())
+}
+
+/// Returns JSON values that only include `type = "function"` tools for
+/// Responses API implementations that reject native tool variants.
+pub fn create_function_tools_json_for_responses_api(
+    tools: &[ToolSpec],
+) -> Result<Vec<Value>, serde_json::Error> {
+    serialize_tools_json_for_responses_api(
+        tools
+            .iter()
+            .filter(|tool| matches!(tool, ToolSpec::Function(_))),
+    )
+}
+
+fn serialize_tools_json_for_responses_api<'a>(
+    tools: impl Iterator<Item = &'a ToolSpec>,
+) -> Result<Vec<Value>, serde_json::Error> {
     let mut tools_json = Vec::new();
 
     for tool in tools {

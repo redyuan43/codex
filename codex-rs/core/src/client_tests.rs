@@ -1,4 +1,5 @@
 use super::AuthRequestTelemetryContext;
+use super::LastResponse;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
@@ -18,6 +19,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use tokio::sync::oneshot;
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
@@ -25,6 +27,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*auth_manager*/ None,
         ThreadId::new(),
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
+        /*provider_id*/ "openai".to_string(),
         provider,
         session_source,
         /*model_verbosity*/ None,
@@ -168,4 +171,28 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[tokio::test]
+async fn get_last_response_keeps_receiver_until_completed_response_arrives() {
+    let client = test_model_client(SessionSource::Cli);
+    let mut session = client.new_session();
+    let (tx, rx) = oneshot::channel();
+    session.websocket_session.last_response_rx = Some(rx);
+
+    assert!(session.get_last_response().is_none());
+    assert!(session.websocket_session.last_response_rx.is_some());
+
+    tx.send(LastResponse {
+        response_id: "resp-1".to_string(),
+        items_added: Vec::new(),
+    })
+    .expect("send last response");
+
+    let last_response = session
+        .get_last_response()
+        .expect("last response should be available after completion");
+    assert_eq!(last_response.response_id, "resp-1");
+    assert_eq!(last_response.items_added, Vec::new());
+    assert!(session.websocket_session.last_response_rx.is_none());
 }

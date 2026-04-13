@@ -37,7 +37,15 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ApplyPatchToolType;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -3225,6 +3233,104 @@ async fn llamacpp_http_skips_previous_response_id_and_relies_on_full_prompt() {
     assert!(
         second_input.len() >= 3,
         "expected full transcript for llama.cpp follow-up request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn llamacpp_http_filters_non_function_tools_from_requests() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let provider = http_responses_provider(&server);
+    let model_slug = "llamacpp-function-only-tools-test-model";
+    let codex = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.include_apply_patch_tool = true;
+            config.model = Some(model_slug.to_string());
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![ModelInfo {
+                    slug: model_slug.to_string(),
+                    display_name: "llama.cpp function-only tools test model".to_string(),
+                    description: Some(
+                        "A test model that would normally advertise native tool types".to_string(),
+                    ),
+                    default_reasoning_level: Some(ReasoningEffort::Medium),
+                    supported_reasoning_levels: vec![ReasoningEffortPreset {
+                        effort: ReasoningEffort::Medium,
+                        description: ReasoningEffort::Medium.to_string(),
+                    }],
+                    shell_type: ConfigShellToolType::Local,
+                    visibility: ModelVisibility::List,
+                    supported_in_api: true,
+                    priority: 1,
+                    additional_speed_tiers: Vec::new(),
+                    availability_nux: None,
+                    upgrade: None,
+                    base_instructions: "base instructions".to_string(),
+                    model_messages: None,
+                    supports_reasoning_summaries: false,
+                    default_reasoning_summary: ReasoningSummary::Auto,
+                    support_verbosity: false,
+                    default_verbosity: None,
+                    apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
+                    web_search_tool_type: Default::default(),
+                    truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
+                    supports_parallel_tool_calls: false,
+                    supports_image_detail_original: false,
+                    context_window: Some(272_000),
+                    auto_compact_token_limit: None,
+                    effective_context_window_percent: 95,
+                    experimental_supported_tools: Vec::new(),
+                    input_modalities: default_input_modalities(),
+                    used_fallback_model_metadata: false,
+                    supports_search_tool: true,
+                }],
+            });
+            config.model_provider_id = LLAMACPP_OSS_PROVIDER_ID.to_string();
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let body = request_log.single_request().body_json();
+    let tool_types = body["tools"]
+        .as_array()
+        .expect("request missing tools array")
+        .iter()
+        .map(|tool| {
+            tool.get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<missing>")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !tool_types.is_empty(),
+        "expected function tools to remain for llama.cpp requests"
+    );
+    assert!(
+        tool_types.iter().all(|tool_type| *tool_type == "function"),
+        "expected llama.cpp request to serialize only function tools, got {tool_types:?}"
     );
 }
 

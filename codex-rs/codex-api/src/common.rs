@@ -156,6 +156,8 @@ pub struct ResponsesApiRequest {
     pub model: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<serde_json::Value>,
     pub tool_choice: String,
@@ -179,7 +181,7 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
         Self {
             model: request.model.clone(),
             instructions: request.instructions.clone(),
-            previous_response_id: None,
+            previous_response_id: request.previous_response_id.clone(),
             input: request.input.clone(),
             tools: request.tools.clone(),
             tool_choice: request.tool_choice.clone(),
