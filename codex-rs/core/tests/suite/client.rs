@@ -63,6 +63,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -3080,7 +3081,7 @@ async fn responses_http_does_not_use_previous_response_id_after_incomplete_respo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lmstudio_http_skips_previous_response_id_and_relies_on_full_prompt() {
+async fn lmstudio_http_uses_previous_response_id_when_prefix_after_completed() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3130,16 +3131,125 @@ async fn lmstudio_http_skips_previous_response_id_and_relies_on_full_prompt() {
 
     let requests = request_log.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].body_json().get("previous_response_id"), None);
-    let second_input = requests[1]
+    assert_eq!(
+        requests[0].body_json()["prompt_cache_key"],
+        requests[1].body_json()["prompt_cache_key"]
+    );
+    assert_eq!(
+        requests[1]
+            .body_json()
+            .get("previous_response_id")
+            .and_then(|value| value.as_str()),
+        Some("resp-1")
+    );
+    assert_eq!(
+        requests[1].body_json()["input"],
+        json!([{
+            "type": "message",
+            "role": "user",
+            "content": [{"type":"input_text","text":"U2"}]
+        }])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lmstudio_http_retries_with_full_prompt_when_previous_response_id_is_rejected() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let first = sse(vec![
+        ev_response_created("resp-1"),
+        ev_message_item_added("assistant", "A1"),
+        ev_completed("resp-1"),
+    ]);
+    let invalid_previous_response = ResponseTemplate::new(400)
+        .insert_header("content-type", "application/json")
+        .set_body_string(
+            json!({
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "previous_response_id is invalid or does not exist"
+                }
+            })
+            .to_string(),
+        );
+    let second = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string(sse(vec![
+            ev_response_created("resp-2"),
+            ev_completed("resp-2"),
+        ]));
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(first),
+            invalid_previous_response,
+            second,
+        ],
+    )
+    .await;
+
+    let provider = http_responses_provider(&server);
+    let codex = test_codex()
+        .with_auth(create_dummy_codex_auth())
+        .with_config(move |config| {
+            config.model_provider_id = LMSTUDIO_OSS_PROVIDER_ID.to_string();
+            config.model_provider = provider;
+        })
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[1].body_json()["prompt_cache_key"],
+        requests[2].body_json()["prompt_cache_key"]
+    );
+    assert_eq!(
+        requests[1]
+            .body_json()
+            .get("previous_response_id")
+            .and_then(|value| value.as_str()),
+        Some("resp-1")
+    );
+    assert_eq!(requests[2].body_json().get("previous_response_id"), None);
+    let fallback_input = requests[2]
         .body_json()
         .get("input")
         .and_then(|value| value.as_array())
         .cloned()
-        .expect("second request missing input");
+        .expect("fallback request missing input");
     assert!(
-        second_input.len() >= 3,
-        "expected full transcript for lmstudio follow-up request"
+        fallback_input.len() >= 3,
+        "expected full transcript for fallback request"
     );
 }
 

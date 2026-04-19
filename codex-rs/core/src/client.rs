@@ -1021,10 +1021,7 @@ impl ModelClientSession {
         &mut self,
         mut request: ResponsesApiRequest,
     ) -> ResponsesApiRequest {
-        if matches!(
-            self.client.state.provider_id.as_str(),
-            LMSTUDIO_OSS_PROVIDER_ID | LLAMACPP_OSS_PROVIDER_ID
-        ) {
+        if self.client.state.provider_id == LLAMACPP_OSS_PROVIDER_ID {
             return request;
         }
 
@@ -1253,7 +1250,20 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request_to_send, options).await;
+            let mut stream_result = client
+                .stream_request(request_to_send.clone(), options)
+                .await;
+            if self.client.state.provider_id == LMSTUDIO_OSS_PROVIDER_ID
+                && request_to_send.previous_response_id.is_some()
+                && stream_result
+                    .as_ref()
+                    .err()
+                    .is_some_and(is_invalid_previous_response_id_error)
+            {
+                warn!("LM Studio rejected previous_response_id; retrying with full transcript");
+                let retry_options = self.build_responses_options(turn_metadata_header, compression);
+                stream_result = client.stream_request(request.clone(), retry_options).await;
+            }
 
             match stream_result {
                 Ok(stream) => {
@@ -1565,6 +1575,28 @@ impl ModelClientSession {
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
+fn is_invalid_previous_response_id_error(error: &ApiError) -> bool {
+    let ApiError::Transport(TransportError::Http {
+        status,
+        body: Some(body),
+        ..
+    }) = error
+    else {
+        return false;
+    };
+
+    if !status.is_client_error() {
+        return false;
+    }
+
+    let body = body.to_ascii_lowercase();
+    body.contains("previous_response_id")
+        && (body.contains("invalid")
+            || body.contains("not found")
+            || body.contains("does not exist")
+            || body.contains("unknown"))
 }
 
 /// Builds the extra headers attached to Responses API requests.

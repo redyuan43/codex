@@ -334,6 +334,17 @@ mod tests {
         })
     }
 
+    fn request_with_body(body: Value) -> wiremock::Request {
+        wiremock::Request {
+            url: "http://localhost/v1/responses"
+                .parse()
+                .expect("valid request url"),
+            method: Method::POST,
+            headers: HeaderMap::new(),
+            body: serde_json::to_vec(&body).expect("serialize request body"),
+        }
+    }
+
     #[test]
     fn call_output_content_and_success_returns_only_single_text_content_item() {
         let single_text = request_with_input(serde_json::json!([
@@ -380,6 +391,20 @@ mod tests {
             mixed_content.custom_tool_call_output_content_and_success("call-4"),
             Some((None, None))
         );
+    }
+
+    #[test]
+    fn incremental_requests_allow_call_outputs_without_repeating_prior_calls() {
+        let request = request_with_body(serde_json::json!({
+            "previous_response_id": "resp-1",
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "done"
+            }]
+        }));
+
+        validate_request_body_invariants(&request);
     }
 }
 
@@ -1589,6 +1614,14 @@ fn validate_request_body_invariants(request: &wiremock::Request) {
         "custom_tool_call_output",
         "orphan custom_tool_call_output with empty call_id should be dropped",
     );
+
+    if body
+        .get("previous_response_id")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return;
+    }
 
     for cid in &function_call_outputs {
         assert!(

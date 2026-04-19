@@ -24,6 +24,7 @@ use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -597,6 +598,7 @@ impl TestCodexBuilder {
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;
         config.cwd = cwd_override;
+        config.model_provider_id = OPENAI_PROVIDER_ID.to_string();
         config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());

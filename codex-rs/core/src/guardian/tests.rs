@@ -16,6 +16,8 @@ use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::test_support;
 use codex_config::config_toml::ConfigToml;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_model_provider_info::built_in_model_providers;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -64,6 +66,9 @@ async fn guardian_test_session_and_turn_with_base_url(
 ) -> (Arc<Session>, Arc<TurnContext>) {
     let (mut session, mut turn) = crate::codex::make_session_and_context().await;
     let mut config = (*turn.config).clone();
+    config.model_provider_id = OPENAI_PROVIDER_ID.to_string();
+    config.model_provider =
+        built_in_model_providers(/*openai_base_url*/ None)[OPENAI_PROVIDER_ID].clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
     config.user_instructions = None;
     let config = Arc::new(config);
@@ -720,12 +725,18 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 
     let first_body = requests[0].body_json();
     let second_body = requests[1].body_json();
+    let second_body_text = second_body.to_string();
+    let followup_contains_first_rationale = second_body_text.contains(first_rationale);
+    let followup_reuses_previous_response_id = second_body
+        .get("previous_response_id")
+        .and_then(serde_json::Value::as_str)
+        == Some("resp-guardian-1");
     assert_eq!(
         first_body["prompt_cache_key"],
         second_body["prompt_cache_key"]
     );
     assert!(
-        second_body.to_string().contains(concat!(
+        second_body_text.contains(concat!(
             "Use prior reviews as context, not binding precedent. ",
             "Follow the Workspace Policy. ",
             "If the user explicitly approves a previously rejected action after being ",
@@ -735,8 +746,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         "follow-up guardian request should include the follow-up reminder"
     );
     assert!(
-        second_body.to_string().contains(first_rationale),
-        "guardian session should append earlier reviews into the follow-up request"
+        followup_contains_first_rationale || followup_reuses_previous_response_id,
+        "guardian session should preserve earlier reviews in the follow-up request"
     );
 
     let mut settings = Settings::clone_current();
@@ -746,7 +757,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         assert_snapshot!(
             "codex_core__guardian__tests__guardian_followup_review_request_layout",
             format!(
-                "{}\n\nshared_prompt_cache_key: {}\nfollowup_contains_first_rationale: {}",
+                "{}\n\nshared_prompt_cache_key: {}\nfollowup_contains_first_rationale: {}\nfollowup_reuses_previous_response_id: {}",
                 context_snapshot::format_labeled_requests_snapshot(
                     "Guardian follow-up review request layout",
                     &[
@@ -756,7 +767,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     &guardian_snapshot_options(),
                 ),
                 first_body["prompt_cache_key"] == second_body["prompt_cache_key"],
-                second_body.to_string().contains(first_rationale),
+                followup_contains_first_rationale,
+                followup_reuses_previous_response_id,
             )
         );
     });
