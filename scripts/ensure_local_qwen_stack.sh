@@ -135,17 +135,70 @@ show_status() {
     echo "proxy_pid=$(cat "${PROXY_PID_FILE}" 2>/dev/null || echo -)"
 }
 
+stop_process() {
+    local pid_file="$1"
+    local pattern="$2"
+
+    cleanup_pid_file "${pid_file}"
+
+    local pid=""
+    if [[ -f "${pid_file}" ]]; then
+        pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    fi
+
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" >/dev/null 2>&1; then
+        kill "${pid}" >/dev/null 2>&1 || true
+        for _ in $(seq 1 20); do
+            if ! kill -0 "${pid}" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 1
+        done
+        if kill -0 "${pid}" >/dev/null 2>&1; then
+            kill -9 "${pid}" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if pgrep -f "${pattern}" >/dev/null 2>&1; then
+        pkill -f "${pattern}" >/dev/null 2>&1 || true
+        for _ in $(seq 1 20); do
+            if ! pgrep -f "${pattern}" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 1
+        done
+        if pgrep -f "${pattern}" >/dev/null 2>&1; then
+            pkill -9 -f "${pattern}" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    rm -f "${pid_file}"
+}
+
+stop_all() {
+    stop_process \
+        "${PROXY_PID_FILE}" \
+        "local_qwen_alias_proxy.py --listen-host 127.0.0.1 --listen-port ${PROXY_PORT}"
+    stop_process \
+        "${BACKEND_PID_FILE}" \
+        "llama-server.*--port ${BACKEND_PORT}"
+    show_status
+}
+
 case "${1:-ensure}" in
     ensure)
         start_backend
         restart_proxy
         show_status
         ;;
+    stop)
+        stop_all
+        ;;
     status)
         show_status
         ;;
     *)
-        echo "usage: $0 [ensure|status]" >&2
+        echo "usage: $0 [ensure|stop|status]" >&2
         exit 2
         ;;
 esac
