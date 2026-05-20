@@ -5,6 +5,7 @@ use rand::Rng;
 
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
+const LOCAL_ANNOUNCEMENT_TIP: &str = include_str!("../../../announcement_tip.toml");
 
 const IS_MACOS: bool = cfg!(target_os = "macos");
 const IS_WINDOWS: bool = cfg!(target_os = "windows");
@@ -122,6 +123,7 @@ fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
 
 pub(crate) mod announcement {
     use crate::tooltips::ANNOUNCEMENT_TIP_URL;
+    use crate::tooltips::LOCAL_ANNOUNCEMENT_TIP;
     use crate::version::CODEX_CLI_VERSION;
     use chrono::NaiveDate;
     use chrono::Utc;
@@ -207,6 +209,10 @@ pub(crate) mod announcement {
     }
 
     fn blocking_init_announcement_tip() -> Option<String> {
+        if !LOCAL_ANNOUNCEMENT_TIP.trim().is_empty() {
+            return Some(LOCAL_ANNOUNCEMENT_TIP.to_string());
+        }
+
         // Avoid system proxy detection to prevent macOS system-configuration panics (#8912).
         let client = reqwest::blocking::Client::builder()
             .no_proxy()
@@ -466,11 +472,11 @@ target_app = "cli"
 version_regex = "^0\\.0\\.0$"
 
 [[announcements]]
-content = "This is a test announcement"
+content = "当前是B.U.S.Corp公司的siyuan模型0.18 Version, Provider: 冯源"
         "#;
 
         assert_eq!(
-            Some("This is a test announcement".to_string()),
+            Some("当前是B.U.S.Corp公司的siyuan模型0.18 Version, Provider: 冯源".to_string()),
             parse_announcement_tip_toml(toml, /*plan*/ None)
         );
     }

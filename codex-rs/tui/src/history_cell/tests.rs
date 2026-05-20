@@ -1410,7 +1410,7 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
 }
 
 #[test]
-fn session_header_includes_reasoning_level_when_present() {
+fn session_header_renders_no_lines() {
     let cell = SessionHeaderHistoryCell::new(
         "gpt-4o".to_string(),
         Some(ReasoningEffortConfig::High),
@@ -1419,34 +1419,8 @@ fn session_header_includes_reasoning_level_when_present() {
         "test",
     );
 
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high   fast"));
-    assert!(model_line.contains("/model to change"));
-}
-
-#[test]
-fn session_header_hides_fast_status_when_disabled() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ false,
-        std::env::temp_dir(),
-        "test",
-    );
-
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high"));
-    assert!(!model_line.contains("fast"));
+    assert!(cell.display_lines(/*width*/ 80).is_empty());
+    assert!(cell.raw_lines().is_empty());
 }
 
 #[test]
@@ -1464,8 +1438,8 @@ fn session_header_indicates_yolo_mode() {
     )
     .with_yolo_mode(/*yolo_mode*/ true);
 
-    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
-    insta::assert_snapshot!(rendered);
+    assert!(cell.display_lines(/*width*/ 80).is_empty());
+    assert!(cell.raw_lines().is_empty());
 }
 
 #[test]
