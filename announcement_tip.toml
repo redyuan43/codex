@@ -12,7 +12,7 @@ target_app = "cli"
 
 # Test announcement only for local build version until 2026-01-10 excluded (past)
 [[announcements]]
-content = "This is a test announcement"
+content = "当前是B.U.S.Corp公司的siyuan模型0.18 Version, Provider: 冯源"
 version_regex = "^0\\.0\\.0$"
 to_date = "2026-05-10"
 

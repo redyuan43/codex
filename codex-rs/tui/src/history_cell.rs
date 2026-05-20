@@ -17,6 +17,7 @@ use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
+#[cfg(test)]
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::live_wrap::take_prefix_by_width;
@@ -999,21 +1000,6 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     }
 }
 
-pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
-
-pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
-    if width < 4 {
-        return None;
-    }
-    let inner_width = std::cmp::min(width.saturating_sub(4) as usize, max_inner_width);
-    Some(inner_width)
-}
-
-/// Render `lines` inside a border sized to the widest span in the content.
-pub(crate) fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    with_border_internal(lines, /*forced_inner_width*/ None)
-}
-
 /// Render `lines` inside a border whose inner width is at least `inner_width`.
 ///
 /// This is useful when callers have already clamped their content to a
@@ -1226,55 +1212,31 @@ pub(crate) fn new_user_prompt(
 }
 
 #[derive(Debug)]
-pub(crate) struct SessionHeaderHistoryCell {
-    version: &'static str,
-    model: String,
-    model_style: Style,
-    reasoning_effort: Option<ReasoningEffortConfig>,
-    show_fast_status: bool,
-    directory: PathBuf,
-}
+pub(crate) struct SessionHeaderHistoryCell;
 
 impl SessionHeaderHistoryCell {
     pub(crate) fn new(
-        model: String,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-        show_fast_status: bool,
-        directory: PathBuf,
-        version: &'static str,
+        _model: String,
+        _reasoning_effort: Option<ReasoningEffortConfig>,
+        _show_fast_status: bool,
+        _directory: PathBuf,
+        _version: &'static str,
     ) -> Self {
-        Self::new_with_style(
-            model,
-            Style::default(),
-            reasoning_effort,
-            show_fast_status,
-            directory,
-            version,
-        )
+        Self
     }
 
     pub(crate) fn new_with_style(
-        model: String,
-        model_style: Style,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-        show_fast_status: bool,
-        directory: PathBuf,
-        version: &'static str,
+        _model: String,
+        _model_style: Style,
+        _reasoning_effort: Option<ReasoningEffortConfig>,
+        _show_fast_status: bool,
+        _directory: PathBuf,
+        _version: &'static str,
     ) -> Self {
-        Self {
-            version,
-            model,
-            model_style,
-            reasoning_effort,
-            show_fast_status,
-            directory,
-        }
+        Self
     }
 
-    fn format_directory(&self, max_width: Option<usize>) -> String {
-        Self::format_directory_inner(&self.directory, max_width)
-    }
-
+    #[cfg(test)]
     fn format_directory_inner(directory: &Path, max_width: Option<usize>) -> String {
         let formatted = if let Some(rel) = relativize_to_home(directory) {
             if rel.as_os_str().is_empty() {
@@ -1298,79 +1260,11 @@ impl SessionHeaderHistoryCell {
         formatted
     }
 
-    fn reasoning_label(&self) -> Option<&'static str> {
-        self.reasoning_effort.map(|effort| match effort {
-            ReasoningEffortConfig::Minimal => "minimal",
-            ReasoningEffortConfig::Low => "low",
-            ReasoningEffortConfig::Medium => "medium",
-            ReasoningEffortConfig::High => "high",
-            ReasoningEffortConfig::XHigh => "xhigh",
-            ReasoningEffortConfig::None => "none",
-        })
-    }
 }
 
 impl HistoryCell for SessionHeaderHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
-            return Vec::new();
-        };
-
-        let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
-
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
-        let title_spans: Vec<Span<'static>> = vec![
-            Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
-            Span::from(" ").dim(),
-            Span::from(format!("(v{})", self.version)).dim(),
-        ];
-
-        const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
-        const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
-        const DIR_LABEL: &str = "directory:";
-        let label_width = DIR_LABEL.len();
-
-        let model_label = format!(
-            "{model_label:<label_width$}",
-            model_label = "model:",
-            label_width = label_width
-        );
-        let reasoning_label = self.reasoning_label();
-        let model_spans: Vec<Span<'static>> = {
-            let mut spans = vec![
-                Span::from(format!("{model_label} ")).dim(),
-                Span::styled(self.model.clone(), self.model_style),
-            ];
-            if let Some(reasoning) = reasoning_label {
-                spans.push(Span::from(" "));
-                spans.push(Span::from(reasoning));
-            }
-            if self.show_fast_status {
-                spans.push("   ".into());
-                spans.push(Span::styled("fast", self.model_style.magenta()));
-            }
-            spans.push("   ".dim());
-            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
-            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
-            spans
-        };
-
-        let dir_label = format!("{DIR_LABEL:<label_width$}");
-        let dir_prefix = format!("{dir_label} ");
-        let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
-        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
-        let dir = self.format_directory(Some(dir_max_width));
-        let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
-
-        let lines = vec![
-            make_row(title_spans),
-            make_row(Vec::new()),
-            make_row(model_spans),
-            make_row(dir_spans),
-        ];
-
-        with_border(lines)
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        Vec::new()
     }
 }
 
@@ -3862,7 +3756,7 @@ mod tests {
     }
 
     #[test]
-    fn session_header_includes_reasoning_level_when_present() {
+    fn session_header_is_hidden_for_siyuan_startup() {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
             Some(ReasoningEffortConfig::High),
@@ -3871,34 +3765,7 @@ mod tests {
             "test",
         );
 
-        let lines = render_lines(&cell.display_lines(/*width*/ 80));
-        let model_line = lines
-            .iter()
-            .find(|line| line.contains("model:"))
-            .expect("model line");
-
-        assert!(model_line.contains("gpt-4o high   fast"));
-        assert!(model_line.contains("/model to change"));
-    }
-
-    #[test]
-    fn session_header_hides_fast_status_when_disabled() {
-        let cell = SessionHeaderHistoryCell::new(
-            "gpt-4o".to_string(),
-            Some(ReasoningEffortConfig::High),
-            /*show_fast_status*/ false,
-            std::env::temp_dir(),
-            "test",
-        );
-
-        let lines = render_lines(&cell.display_lines(/*width*/ 80));
-        let model_line = lines
-            .iter()
-            .find(|line| line.contains("model:"))
-            .expect("model line");
-
-        assert!(model_line.contains("gpt-4o high"));
-        assert!(!model_line.contains("fast"));
+        assert!(cell.display_lines(/*width*/ 80).is_empty());
     }
 
     #[test]
