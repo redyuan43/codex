@@ -148,6 +148,7 @@ mod keymap;
 mod keymap_setup;
 mod line_truncation;
 pub(crate) mod live_wrap;
+mod loop_scheduler;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
 mod markdown;

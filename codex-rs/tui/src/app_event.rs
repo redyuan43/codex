@@ -932,6 +932,11 @@ pub(crate) enum AppEvent {
         collaboration_mode: CollaborationModeMask,
     },
 
+    /// Submit a user message from an app-level source such as a scheduled loop.
+    SubmitUserMessage {
+        text: String,
+    },
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 
