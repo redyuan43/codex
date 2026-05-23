@@ -278,7 +278,12 @@ impl SessionHeaderHistoryCell {
 
 impl HistoryCell for SessionHeaderHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        Vec::new()
+        vec![
+            vec!["  ".into(), "o----.".cyan()].into(),
+            vec!["     ".into(), ".-'".cyan(), "  ".into(), "siyuan".bold()].into(),
+            vec!["  ".into(), ".-'".cyan()].into(),
+            vec!["  ".into(), "'----".cyan(), "o".green()].into(),
+        ]
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {

@@ -1412,7 +1412,7 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
 }
 
 #[test]
-fn session_header_renders_no_lines() {
+fn session_header_renders_startup_logo() {
     let cell = SessionHeaderHistoryCell::new(
         "gpt-4o".to_string(),
         Some(ReasoningEffortConfig::High),
@@ -1420,8 +1420,9 @@ fn session_header_renders_no_lines() {
         std::env::temp_dir(),
         "test",
     );
+    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
 
-    assert!(cell.display_lines(/*width*/ 80).is_empty());
+    insta::assert_snapshot!(rendered);
     assert!(cell.raw_lines().is_empty());
 }
 
@@ -1440,7 +1441,10 @@ fn session_header_indicates_yolo_mode() {
     )
     .with_yolo_mode(/*yolo_mode*/ true);
 
-    assert!(cell.display_lines(/*width*/ 80).is_empty());
+    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+    assert!(rendered.contains("siyuan"));
+    assert!(!rendered.contains("gpt-5"));
+    assert!(!rendered.contains("/tmp/project"));
     assert!(cell.raw_lines().is_empty());
 }
 
