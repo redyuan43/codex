@@ -34,6 +34,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
+const LOOP_USAGE: &str = "Usage: /loop <duration> <prompt>, /loop every <duration> <prompt>, /loop list, or /loop stop [id]";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
 
 impl ChatWidget {
@@ -239,6 +240,15 @@ impl ChatWidget {
                         Some(GOAL_USAGE_HINT.to_string()),
                     );
                 }
+            }
+            SlashCommand::Loop => {
+                self.add_info_message(
+                    LOOP_USAGE.to_string(),
+                    Some(
+                        "Examples: /loop 10m check the build, /loop every 1h summarize progress, /loop list, /loop stop."
+                            .to_string(),
+                    ),
+                );
             }
             SlashCommand::Side | SlashCommand::Btw => {
                 self.request_empty_side_conversation(cmd);
@@ -749,6 +759,70 @@ impl ChatWidget {
                     self.bottom_pane.drain_pending_submission_state();
                 }
             }
+            SlashCommand::Loop if !trimmed.is_empty() => {
+                if matches!(trimmed, "list" | "ls") {
+                    let descriptions = crate::loop_scheduler::active_loop_descriptions();
+                    if descriptions.is_empty() {
+                        self.add_info_message(
+                            "No active /loop tasks.".to_string(),
+                            /*hint*/ None,
+                        );
+                    } else {
+                        self.add_info_message(
+                            format!("Active /loop tasks: {}", descriptions.join(", ")),
+                            /*hint*/ None,
+                        );
+                    }
+                    self.append_message_history_entry(format!("/loop {trimmed}"));
+                } else if trimmed == "stop" {
+                    let ids = crate::loop_scheduler::stop_all_loops();
+                    let message = if ids.is_empty() {
+                        "Stopped 0 active /loop tasks.".to_string()
+                    } else {
+                        let ids = ids
+                            .iter()
+                            .map(|id| format!("#{id}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("Stopped active /loop task(s): {ids}.")
+                    };
+                    self.add_info_message(message, /*hint*/ None);
+                    self.append_message_history_entry("/loop stop".to_string());
+                } else if let Some(loop_id) = trimmed.strip_prefix("stop ") {
+                    match crate::loop_scheduler::parse_loop_id(loop_id) {
+                        Ok(loop_id) => {
+                            if crate::loop_scheduler::stop_loop(loop_id) {
+                                self.add_info_message(
+                                    format!("Stopped /loop #{loop_id}."),
+                                    /*hint*/ None,
+                                );
+                                self.append_message_history_entry(format!("/loop stop {loop_id}"));
+                            } else {
+                                self.add_error_message(format!("No active /loop #{loop_id}."));
+                            }
+                        }
+                        Err(err) => self.add_error_message(err),
+                    }
+                } else {
+                    match crate::loop_scheduler::parse_loop_spec(trimmed) {
+                        Ok(spec) => {
+                            let id = crate::loop_scheduler::schedule_loop(
+                                spec.clone(),
+                                self.app_event_tx.clone(),
+                            );
+                            self.add_info_message(
+                                crate::loop_scheduler::loop_scheduled_message(id, &spec),
+                                Some(
+                                    "This /loop runs while the current TUI process is alive."
+                                        .to_string(),
+                                ),
+                            );
+                            self.append_message_history_entry(format!("/loop {trimmed}"));
+                        }
+                        Err(err) => self.add_error_message(err),
+                    }
+                }
+            }
             SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
                     let command = cmd.command();
@@ -946,6 +1020,7 @@ impl ChatWidget {
             | SlashCommand::Vim
             | SlashCommand::Diff
             | SlashCommand::Rename
+            | SlashCommand::Loop
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Feedback
             | SlashCommand::New

@@ -77,6 +77,14 @@ impl ChatWidget {
             .set_queue_submissions(queue && !self.is_session_configured());
     }
 
+    pub(crate) fn submit_or_queue_user_message(&mut self, user_message: UserMessage) {
+        if !self.is_session_configured() || self.is_user_turn_pending_or_running() {
+            self.queue_user_message(user_message);
+        } else {
+            self.submit_user_message(user_message);
+        }
+    }
+
     pub(super) fn queue_user_message_with_options(
         &mut self,
         user_message: UserMessage,
