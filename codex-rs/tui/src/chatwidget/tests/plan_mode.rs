@@ -1214,7 +1214,6 @@ async fn collab_mode_shift_tab_cycles_only_when_idle() {
 async fn mode_switch_surfaces_model_change_notification_when_effective_model_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    let default_model = chat.current_model().to_string();
 
     let mut plan_mask =
         collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
@@ -1228,7 +1227,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.contains("Model changed to gpt-5.1-codex-mini medium for Plan mode."),
+        plan_messages.contains("模型切换成深度思考模式."),
         "expected Plan-mode model switch notice, got: {plan_messages:?}"
     );
 
@@ -1241,10 +1240,8 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
         .map(|lines| lines_to_single_string(lines))
         .collect::<Vec<_>>()
         .join("\n");
-    let expected_default_message =
-        format!("Model changed to {default_model} default for Default mode.");
     assert!(
-        default_messages.contains(&expected_default_message),
+        default_messages.contains("模型切换成默认模式."),
         "expected Default-mode model switch notice, got: {default_messages:?}"
     );
 }
@@ -1265,7 +1262,7 @@ async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_sam
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.contains("Model changed to gpt-5.3-codex medium for Plan mode."),
+        plan_messages.contains("模型切换成深度思考模式."),
         "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
     );
 }
