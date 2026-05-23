@@ -59,9 +59,7 @@ impl ChatWidget {
         self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.status_state.retry_status_header = None;
-        if self.active_hook_cell.take().is_some() {
-            self.bump_active_cell_revision();
-        }
+        self.clear_active_hook_cell();
         self.status_state.pending_status_indicator_restore = false;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
@@ -89,9 +87,9 @@ impl ChatWidget {
         // source only when no earlier item-level event (AgentMessageItem, plan
         // commit, review output) already recorded markdown for this turn. This
         // prevents the final summary from overwriting a more specific source.
-        let sanitized_last_agent_message = last_agent_message
-            .as_deref()
-            .map(|message| parse_assistant_markdown(message).visible_markdown);
+        let sanitized_last_agent_message = last_agent_message.as_deref().map(|message| {
+            parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown
+        });
         if let Some(message) = sanitized_last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())
@@ -162,6 +160,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.status_state.pending_status_indicator_restore = false;
         self.input_queue.user_turn_pending_start = false;
+        self.clear_active_hook_cell();
         self.turn_lifecycle.finish();
         self.update_task_running_state();
         self.running_commands.clear();
@@ -302,9 +301,7 @@ impl ChatWidget {
         // Turn-scoped hook rows are transient live state; once the turn is over,
         // do not leave an orphaned running row behind if no matching completion
         // event arrived before cancellation.
-        if self.active_hook_cell.take().is_some() {
-            self.bump_active_cell_revision();
-        }
+        self.clear_active_hook_cell();
         // Reset running state and clear streaming buffers.
         self.input_queue.user_turn_pending_start = false;
         self.turn_lifecycle.finish();
@@ -317,6 +314,7 @@ impl ChatWidget {
         self.stream_controller = None;
         self.plan_stream_controller = None;
         self.status_state.pending_status_indicator_restore = false;
+        self.clear_cancel_edit();
         self.request_status_line_branch_refresh();
         self.request_status_line_git_summary_refresh();
         self.maybe_show_pending_rate_limit_prompt();

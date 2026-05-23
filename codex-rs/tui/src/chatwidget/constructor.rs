@@ -64,7 +64,11 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.to_path_buf());
-        let effective_service_tier = config.service_tier.clone();
+        let effective_service_tier = crate::service_tier_resolution::effective_service_tier(
+            &config,
+            &header_model,
+            &model_catalog.try_list_models().unwrap_or_default(),
+        );
         let current_terminal_info = terminal_info();
         let runtime_keymap = RuntimeKeymap::from_config(&config.tui_keymap).ok();
         let default_keymap = RuntimeKeymap::defaults();
@@ -115,6 +119,7 @@ impl ChatWidget {
             initial_user_message,
             status_account_display,
             runtime_model_provider_base_url,
+            remote_connection: None,
             token_info: None,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
@@ -177,6 +182,7 @@ impl ChatWidget {
             forked_from: None,
             interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
             input_queue: InputQueueState::default(),
+            cancel_edit: CancelEditState::default(),
             chat_keymap,
             queued_message_edit_hint_binding,
             show_welcome_banner: is_first_run,
@@ -245,13 +251,12 @@ impl ChatWidget {
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
         #[cfg(target_os = "windows")]
-        widget.bottom_pane.set_windows_degraded_sandbox_active(
-            crate::legacy_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&widget.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
+        widget
+            .bottom_pane
+            .set_windows_degraded_sandbox_active(matches!(
+                crate::windows_sandbox::level_from_config(&widget.config),
+                WindowsSandboxLevel::RestrictedToken
+            ));
         widget.update_collaboration_mode_indicator();
 
         widget

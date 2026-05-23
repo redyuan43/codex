@@ -60,9 +60,14 @@ fn test_model_info(
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers,
+        default_service_tier: None,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -79,6 +84,7 @@ fn test_model_info(
         context_window: Some(272_000),
         max_context_window: None,
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
@@ -161,6 +167,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                 .features
                 .enable(Feature::Collab)
                 .expect("test config should allow feature update");
+            config.multi_agent_v2.hide_spawn_agent_metadata = false;
         });
     let test = builder.build(&server).await?;
     wait_for_model_available(&test.thread_manager.get_models_manager(), "visible-model").await;
