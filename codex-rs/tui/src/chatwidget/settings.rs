@@ -730,23 +730,13 @@ impl ChatWidget {
         if previous_mode != next_mode
             && (previous_model != next_model || previous_effort != next_effort)
         {
-            let mut message = format!("Model changed to {next_model}");
-            if !next_model.starts_with("codex-auto-") {
-                let reasoning_label = match next_effort {
-                    Some(ReasoningEffortConfig::Minimal) => "minimal",
-                    Some(ReasoningEffortConfig::Low) => "low",
-                    Some(ReasoningEffortConfig::Medium) => "medium",
-                    Some(ReasoningEffortConfig::High) => "high",
-                    Some(ReasoningEffortConfig::XHigh) => "xhigh",
-                    None | Some(ReasoningEffortConfig::None) => "default",
-                };
-                message.push(' ');
-                message.push_str(reasoning_label);
-            }
-            message.push_str(" for ");
-            message.push_str(next_mode.display_name());
-            message.push_str(" mode.");
-            self.add_info_message(message, /*hint*/ None);
+            let message = match next_mode {
+                ModeKind::Plan => "模型切换成深度思考模式.",
+                ModeKind::Default => "模型切换成默认模式.",
+                ModeKind::PairProgramming => "模型切换成结对编程模式.",
+                ModeKind::Execute => "模型切换成执行模式.",
+            };
+            self.add_info_message(message.to_string(), /*hint*/ None);
         }
         self.request_redraw();
     }
