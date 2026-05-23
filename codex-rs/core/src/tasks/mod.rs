@@ -214,7 +214,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Option<String>> + Send;
 
@@ -245,7 +245,7 @@ pub(crate) trait AnySessionTask: Send + Sync + 'static {
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>>;
 
@@ -276,7 +276,7 @@ where
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
-        input: Vec<UserInput>,
+        input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> BoxFuture<'static, Option<String>> {
         Box::pin(SessionTask::run(
@@ -357,7 +357,7 @@ impl Session {
             debug_assert!(turn.tasks.is_empty());
             Arc::clone(&turn.turn_state)
         };
-        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start;
+        turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         let mut pending_items = queued_response_items
             .into_iter()
             .map(TurnInput::ResponseInputItem)
@@ -366,7 +366,7 @@ impl Session {
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
             .await;
-        self.emit_turn_start_lifecycle(turn_context.extension_data.as_ref())
+        self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
             .await;
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
@@ -380,6 +380,11 @@ impl Session {
         ));
         let ctx = Arc::clone(&turn_context);
         let task_for_run = Arc::clone(&task);
+        let task_input = if input.is_empty() {
+            Vec::new()
+        } else {
+            vec![TurnInput::UserInput(input)]
+        };
         let task_cancellation_token = cancellation_token.child_token();
         // Task-owned turn spans keep a core-owned span open for the
         // full task lifecycle after the submission dispatch span ends.
@@ -405,7 +410,7 @@ impl Session {
                     .run(
                         Arc::clone(&session_ctx),
                         ctx,
-                        input,
+                        task_input,
                         task_cancellation_token.child_token(),
                     )
                     .await;
@@ -655,7 +660,8 @@ impl Session {
                     "false"
                 },
             );
-            let network_proxy_active = match self.services.network_proxy.as_ref() {
+            let network_proxy = self.services.network_proxy.load_full();
+            let network_proxy_active = match network_proxy.as_ref() {
                 Some(started_network_proxy) => {
                     match started_network_proxy.proxy().current_cfg().await {
                         Ok(config) => config.network.enabled,
