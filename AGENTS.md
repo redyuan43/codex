@@ -70,6 +70,21 @@ Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in 
 
 目标：让用户输入 `siyuan` 时启动本仓库刚编译出的 Codex debug 二进制，而不是系统里已有的 `/home/ivan/.local/bin/siyuan`。
 
+每次修改 Codex 并确认测试/验证没有问题后，必须编译本地 debug CLI：
+
+```bash
+cd /home/ivan/github/codex/codex-rs
+cargo build -p codex-cli
+```
+
+编译完成后，需要确认 `siyuan` 映射到刚生成的 debug 二进制：
+
+```bash
+bash -ic 'type siyuan; siyuan --version'
+```
+
+如果没有映射到 `/home/ivan/github/codex/codex-rs/target/debug/codex`，更新 `~/.bashrc` 中的 alias 后重新验证。
+
 当前验证过的入口：
 
 ```bash
