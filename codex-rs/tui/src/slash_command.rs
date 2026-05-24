@@ -13,6 +13,14 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    #[strum(to_string = "think-more", serialize = "think-up")]
+    ThinkMore,
+    #[strum(to_string = "think-less", serialize = "think-down")]
+    ThinkLess,
+    #[strum(to_string = "model-up")]
+    ModelUp,
+    #[strum(to_string = "model-down")]
+    ModelDown,
     Ide,
     Permissions,
     Keymap,
@@ -107,6 +115,10 @@ impl SlashCommand {
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::ThinkMore => "increase reasoning effort by one level",
+            SlashCommand::ThinkLess => "decrease reasoning effort by one level",
+            SlashCommand::ModelUp => "switch to the next stronger model",
+            SlashCommand::ModelDown => "switch to the next cheaper model",
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
@@ -188,6 +200,10 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
+            | SlashCommand::ThinkMore
+            | SlashCommand::ThinkLess
+            | SlashCommand::ModelUp
+            | SlashCommand::ModelDown
             | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Keymap
@@ -275,6 +291,38 @@ mod tests {
     fn pet_alias_parses_to_pets_command() {
         assert_eq!(SlashCommand::Pets.command(), "pets");
         assert_eq!(SlashCommand::from_str("pet"), Ok(SlashCommand::Pets));
+    }
+
+    #[test]
+    fn model_shortcut_commands_parse() {
+        assert_eq!(SlashCommand::ThinkMore.command(), "think-more");
+        assert_eq!(
+            SlashCommand::from_str("think-more"),
+            Ok(SlashCommand::ThinkMore)
+        );
+        assert_eq!(
+            SlashCommand::from_str("think-up"),
+            Ok(SlashCommand::ThinkMore)
+        );
+        assert_eq!(SlashCommand::ThinkLess.command(), "think-less");
+        assert_eq!(
+            SlashCommand::from_str("think-less"),
+            Ok(SlashCommand::ThinkLess)
+        );
+        assert_eq!(
+            SlashCommand::from_str("think-down"),
+            Ok(SlashCommand::ThinkLess)
+        );
+        assert_eq!(SlashCommand::ModelUp.command(), "model-up");
+        assert_eq!(
+            SlashCommand::from_str("model-up"),
+            Ok(SlashCommand::ModelUp)
+        );
+        assert_eq!(SlashCommand::ModelDown.command(), "model-down");
+        assert_eq!(
+            SlashCommand::from_str("model-down"),
+            Ok(SlashCommand::ModelDown)
+        );
     }
 
     #[test]

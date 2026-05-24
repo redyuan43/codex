@@ -6,6 +6,8 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::goal_validation::GoalObjectiveValidationSource;
+use super::reasoning_shortcuts::ModelShortcutDirection;
+use super::reasoning_shortcuts::ReasoningShortcutDirection;
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -203,6 +205,18 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::ThinkMore => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Raise);
+            }
+            SlashCommand::ThinkLess => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Lower);
+            }
+            SlashCommand::ModelUp => {
+                self.handle_model_slash_command(ModelShortcutDirection::Stronger);
+            }
+            SlashCommand::ModelDown => {
+                self.handle_model_slash_command(ModelShortcutDirection::Cheaper);
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -1031,6 +1045,10 @@ impl ChatWidget {
             | SlashCommand::Compact
             | SlashCommand::Review
             | SlashCommand::Model
+            | SlashCommand::ThinkMore
+            | SlashCommand::ThinkLess
+            | SlashCommand::ModelUp
+            | SlashCommand::ModelDown
             | SlashCommand::Realtime
             | SlashCommand::Settings
             | SlashCommand::Personality

@@ -1324,6 +1324,34 @@ impl App {
                     }
                 }
             }
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort,
+                message,
+            } => {
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    crate::config_update::build_model_selection_edits(model.as_str(), effort),
+                )
+                .await
+                {
+                    Ok(_) => {
+                        let effort_label = effort
+                            .map(|selected_effort| selected_effort.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model selection"
+                        );
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save default model: {err}"));
+                    }
+                }
+            }
             AppEvent::PluginUninstallLoaded {
                 cwd,
                 plugin_id: _plugin_id,
