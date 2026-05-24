@@ -107,6 +107,7 @@ mod approvals;
 mod base;
 mod exec;
 mod hook_cell;
+mod hook_summary;
 mod mcp;
 mod messages;
 mod notices;

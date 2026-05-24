@@ -3882,6 +3882,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tungstenite",
  "two-face",
  "unicode-segmentation",
  "unicode-width 0.2.1",
