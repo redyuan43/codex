@@ -15,6 +15,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::build_reqwest_client;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_otel::TelemetryAuthMode;
@@ -35,16 +36,19 @@ const MODELS_ENDPOINT: &str = "/models";
 #[derive(Debug)]
 pub(crate) struct OpenAiModelsEndpoint {
     provider_info: ModelProviderInfo,
+    provider_id: Option<String>,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl OpenAiModelsEndpoint {
     pub(crate) fn new(
         provider_info: ModelProviderInfo,
+        provider_id: Option<String>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
         Self {
             provider_info,
+            provider_id,
             auth_manager,
         }
     }
@@ -69,6 +73,14 @@ impl OpenAiModelsEndpoint {
 impl ModelsEndpointClient for OpenAiModelsEndpoint {
     fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
+    }
+
+    fn supports_unauthenticated_model_catalog(&self) -> bool {
+        self.provider_id.as_deref() == Some(LMSTUDIO_OSS_PROVIDER_ID)
+    }
+
+    fn model_catalog_is_authoritative(&self) -> bool {
+        self.provider_id.as_deref() == Some(LMSTUDIO_OSS_PROVIDER_ID)
     }
 
     async fn uses_codex_backend(&self) -> bool {
@@ -229,6 +241,7 @@ mod tests {
     fn command_auth_provider_reports_command_auth_without_cached_auth() {
         let endpoint = OpenAiModelsEndpoint::new(
             provider_info_with_command_auth(),
+            /*provider_id*/ None,
             /*auth_manager*/ None,
         );
 
@@ -239,6 +252,7 @@ mod tests {
     fn provider_without_command_auth_reports_no_command_auth() {
         let endpoint = OpenAiModelsEndpoint::new(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*provider_id*/ None,
             /*auth_manager*/ None,
         );
 

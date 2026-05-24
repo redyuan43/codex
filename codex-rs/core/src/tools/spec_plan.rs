@@ -213,10 +213,15 @@ fn build_model_visible_specs_and_registry(
     }
 
     let registry = ToolRegistry::from_tools(runtimes);
+    let provider_capabilities = turn_context.provider.capabilities();
     let model_visible_specs = merge_into_namespaces(specs)
         .into_iter()
-        .filter(|spec| {
-            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
+        .filter(|spec| match spec {
+            ToolSpec::Namespace(_) => provider_capabilities.namespace_tools,
+            ToolSpec::Function(_) | ToolSpec::Freeform(_) | ToolSpec::ToolSearch { .. } => {
+                provider_capabilities.function_tools
+            }
+            ToolSpec::ImageGeneration { .. } | ToolSpec::WebSearch { .. } => true,
         })
         .collect();
 

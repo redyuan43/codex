@@ -6,7 +6,9 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_mcp::ToolInfo;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::create_model_provider_with_id;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -251,6 +253,22 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_lmstudio_provider(turn: &mut TurnContext) {
+    let provider_info = ModelProviderInfo {
+        base_url: Some("http://localhost:1234/v1".to_string()),
+        ..Default::default()
+    };
+    update_config(turn, |config| {
+        config.model_provider_id = LMSTUDIO_OSS_PROVIDER_ID.to_string();
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider_with_id(
+        Some(LMSTUDIO_OSS_PROVIDER_ID.to_string()),
+        provider_info,
+        turn.auth_manager.clone(),
+    );
 }
 
 fn duplicate_primary_environment(turn: &mut TurnContext) {
@@ -954,4 +972,20 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     })
     .await;
     unsupported_provider.assert_visible_lacks(&["web_search"]);
+
+    let lmstudio = probe(|turn| {
+        use_chatgpt_auth(turn);
+        use_lmstudio_provider(turn);
+        set_web_search_mode(turn, WebSearchMode::Live);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    lmstudio.assert_visible_lacks(&[
+        "exec_command",
+        "image_generation",
+        "request_user_input",
+        "view_image",
+        "web_search",
+    ]);
 }

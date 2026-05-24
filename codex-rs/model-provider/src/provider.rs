@@ -6,6 +6,7 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -25,6 +26,7 @@ use crate::models_endpoint::OpenAiModelsEndpoint;
 /// that the active provider marks unsupported here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
+    pub function_tools: bool,
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
@@ -33,6 +35,7 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
+            function_tools: true,
             namespace_tools: true,
             image_generation: true,
             web_search: true,
@@ -149,24 +152,43 @@ pub fn create_model_provider(
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
+    create_model_provider_with_id(/*provider_id*/ None, provider_info, auth_manager)
+}
+
+/// Creates a runtime model provider with the configured provider id attached.
+pub fn create_model_provider_with_id(
+    provider_id: Option<String>,
+    provider_info: ModelProviderInfo,
+    auth_manager: Option<Arc<AuthManager>>,
+) -> SharedModelProvider {
     if provider_info.is_amazon_bedrock() {
         Arc::new(AmazonBedrockModelProvider::new(provider_info))
     } else {
-        Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+        Arc::new(ConfiguredModelProvider::new(
+            provider_id,
+            provider_info,
+            auth_manager,
+        ))
     }
 }
 
 /// Runtime model provider backed by configured `ModelProviderInfo`.
 #[derive(Clone, Debug)]
 struct ConfiguredModelProvider {
+    provider_id: Option<String>,
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 }
 
 impl ConfiguredModelProvider {
-    fn new(provider_info: ModelProviderInfo, auth_manager: Option<Arc<AuthManager>>) -> Self {
+    fn new(
+        provider_id: Option<String>,
+        provider_info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+    ) -> Self {
         let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
         Self {
+            provider_id,
             info: provider_info,
             auth_manager,
         }
@@ -177,6 +199,19 @@ impl ConfiguredModelProvider {
 impl ModelProvider for ConfiguredModelProvider {
     fn info(&self) -> &ModelProviderInfo {
         &self.info
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        if self.provider_id.as_deref() == Some(LMSTUDIO_OSS_PROVIDER_ID) {
+            return ProviderCapabilities {
+                function_tools: false,
+                namespace_tools: false,
+                image_generation: false,
+                web_search: false,
+            };
+        }
+
+        ProviderCapabilities::default()
     }
 
     fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -248,6 +283,7 @@ impl ModelProvider for ConfiguredModelProvider {
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
+                    self.provider_id.clone(),
                     self.auth_manager.clone(),
                 ));
                 Arc::new(OpenAiModelsManager::new(
@@ -264,6 +300,7 @@ impl ModelProvider for ConfiguredModelProvider {
 mod tests {
     use std::num::NonZeroU64;
 
+    use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
     use codex_model_provider_info::WireApi;
     use codex_models_manager::manager::RefreshStrategy;
@@ -359,6 +396,25 @@ mod tests {
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn lmstudio_provider_disables_responses_extension_tools() {
+        let provider = create_model_provider_with_id(
+            Some(LMSTUDIO_OSS_PROVIDER_ID.to_string()),
+            provider_for("http://localhost:1234/v1".to_string()),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                function_tools: false,
+                namespace_tools: false,
+                image_generation: false,
+                web_search: false,
+            }
+        );
     }
 
     #[test]
@@ -586,5 +642,40 @@ mod tests {
                 .iter()
                 .any(|model| model.slug == "provider-model")
         );
+    }
+
+    #[tokio::test]
+    async fn lmstudio_provider_models_manager_uses_local_models_catalog_without_auth() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {"id": "qwen/qwen3-4b-2507", "object": "model"},
+                    {"id": "openai/gpt-oss-20b", "object": "model"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let provider = create_model_provider_with_id(
+            Some(LMSTUDIO_OSS_PROVIDER_ID.to_string()),
+            provider_for(server.uri()),
+            /*auth_manager*/ None,
+        );
+        let manager =
+            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+        let available = manager.list_models(RefreshStrategy::Online).await;
+
+        assert_eq!(
+            available
+                .iter()
+                .map(|model| model.model.as_str())
+                .collect::<Vec<_>>(),
+            vec!["qwen/qwen3-4b-2507", "openai/gpt-oss-20b"]
+        );
+        assert!(available.iter().all(|model| model.show_in_picker));
     }
 }

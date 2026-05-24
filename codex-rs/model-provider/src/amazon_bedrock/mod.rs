@@ -57,6 +57,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
+            function_tools: true,
             namespace_tools: false,
             image_generation: false,
             web_search: false,
@@ -139,6 +140,7 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
+                function_tools: true,
                 namespace_tools: false,
                 image_generation: false,
                 web_search: false,
