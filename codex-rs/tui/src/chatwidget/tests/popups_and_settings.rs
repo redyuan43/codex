@@ -9,6 +9,7 @@ use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::PluginAvailability;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn realtime_error_closes_without_followup_closed_info() {
@@ -2844,7 +2845,11 @@ async fn assert_reasoning_shortcuts_update_effort(
         assert!(
             events
                 .iter()
-                .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+                .all(|event| !matches!(
+                    event,
+                    AppEvent::PersistModelSelection { .. }
+                        | AppEvent::PersistModelSelectionWithMessage { .. }
+                )),
             "expected no model persistence event for {key_event:?}; events: {events:?}"
         );
     }
@@ -2914,10 +2919,198 @@ async fn reasoning_shortcut_is_ignored_with_model_popup_open() {
         "did not expect reasoning update while popup is active; events: {events:?}"
     );
     assert!(
+        events.iter().all(|event| !matches!(
+            event,
+            AppEvent::PersistModelSelection { .. }
+                | AppEvent::PersistModelSelectionWithMessage { .. }
+        )),
+        "did not expect model persistence while popup is active; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_think_more_raises_and_persists_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+    chat.dispatch_command(SlashCommand::ThinkMore);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected reasoning update event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                message,
+            } if model == "gpt-5.4" && message == "模型现在有变强了。"
+        )),
+        "expected model persistence event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_think_less_lowers_and_persists_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+    chat.dispatch_command(SlashCommand::ThinkLess);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Low))
+        )),
+        "expected reasoning update event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort: Some(ReasoningEffortConfig::Low),
+                message,
+            } if model == "gpt-5.4" && message == "模型现在变弱了。"
+        )),
+        "expected model persistence event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_model_down_switches_to_next_cheaper_model() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    chat.dispatch_command(SlashCommand::ModelDown);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
         events
             .iter()
-            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
-        "did not expect model persistence while popup is active; events: {events:?}"
+            .any(|event| matches!(event, AppEvent::UpdateModel(model) if model == "gpt-5.4")),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                message,
+            } if model == "gpt-5.4" && message == "模型现在级别变低了。"
+        )),
+        "expected model persistence event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_model_up_switches_to_next_stronger_model() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    chat.dispatch_command(SlashCommand::ModelUp);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AppEvent::UpdateModel(model) if model == "gpt-5.5")),
+        "expected model update event; events: {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                message,
+            } if model == "gpt-5.5" && message == "模型现在级别变高了。"
+        )),
+        "expected model persistence event; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_shortcuts_report_bounds_without_persisting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    chat.dispatch_command(SlashCommand::ThinkMore);
+    chat.dispatch_command(SlashCommand::ModelUp);
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("推理现在已经是最强了。"),
+        "expected reasoning bound message; rendered: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("模型现在已经是最高级别了。"),
+        "expected model bound message; rendered: {rendered:?}"
+    );
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().all(|event| !matches!(
+            event,
+            AppEvent::PersistModelSelection { .. }
+                | AppEvent::PersistModelSelectionWithMessage { .. }
+        )),
+        "expected no model persistence event at bounds; events: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_model_down_clamps_unsupported_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let mut models = chat
+        .model_catalog
+        .try_list_models()
+        .expect("models available");
+    let target = models
+        .iter_mut()
+        .find(|preset| preset.model == "gpt-5.4")
+        .expect("target model exists");
+    target.supported_reasoning_efforts = target
+        .supported_reasoning_efforts
+        .iter()
+        .filter(|option| option.effort == ReasoningEffortConfig::Low)
+        .cloned()
+        .collect();
+    target.default_reasoning_effort = ReasoningEffortConfig::Low;
+    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+
+    chat.dispatch_command(SlashCommand::ModelDown);
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort: Some(ReasoningEffortConfig::Low),
+                message,
+            } if model == "gpt-5.4" && message == "模型现在级别变低了。"
+        )),
+        "expected unsupported reasoning to clamp to low; events: {events:?}"
     );
 }
 

@@ -386,6 +386,8 @@ mod tests {
             cmds,
             vec![
                 "model".to_string(),
+                "model-up".to_string(),
+                "model-down".to_string(),
                 "memories".to_string(),
                 "mention".to_string(),
                 "mcp".to_string()

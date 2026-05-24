@@ -531,4 +531,25 @@ impl ChatWidget {
         self.app_event_tx
             .send(AppEvent::PersistModelSelection { model, effort });
     }
+
+    pub(super) fn apply_model_and_effort_for_all_modes_with_message(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        message: String,
+    ) {
+        self.apply_model_and_effort_without_persist(model.clone(), effort);
+        if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
+            self.app_event_tx
+                .send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+            self.app_event_tx
+                .send(AppEvent::PersistPlanModeReasoningEffort(effort));
+        }
+        self.app_event_tx
+            .send(AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort,
+                message,
+            });
+    }
 }
