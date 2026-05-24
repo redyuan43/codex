@@ -3,5 +3,6 @@ source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: combined
 ---
 • UserPromptSubmit hook (stopped)
+  摘要：Hook 已拦截，需要处理：prompt blocked
   warning: go-workflow must start from PlanMode
   stop: prompt blocked

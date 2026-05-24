@@ -11,6 +11,7 @@
 //!    first drawn.
 //! 4. Completed runs only persist when they have output or a non-success status.
 use super::HistoryCell;
+use super::hook_summary::summarize_hook_run;
 use super::plain_lines;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
@@ -90,6 +91,8 @@ enum HookRunState {
     Completed {
         /// Final protocol status for the hook invocation.
         status: HookRunStatus,
+        /// One-sentence semantic summary shown before raw hook output.
+        summary: Option<String>,
         /// Hook output entries rendered below the completed header.
         entries: Vec<HookOutputEntry>,
     },
@@ -228,6 +231,7 @@ impl HookCell {
             }
             return true;
         }
+        let summary = summarize_hook_run(&run);
         let HookRunSummary {
             event_name,
             status_message,
@@ -238,7 +242,7 @@ impl HookCell {
         let existing = &mut self.runs[index];
         existing.event_name = event_name;
         existing.status_message = status_message;
-        existing.state = HookRunState::completed(status, entries);
+        existing.state = HookRunState::completed(status, summary, entries);
         true
     }
 
@@ -249,6 +253,7 @@ impl HookCell {
         if hook_run_is_quiet_success(&run) {
             return;
         }
+        let summary = summarize_hook_run(&run);
         let HookRunSummary {
             id,
             event_name,
@@ -261,7 +266,7 @@ impl HookCell {
             id,
             event_name,
             status_message,
-            state: HookRunState::completed(status, entries),
+            state: HookRunState::completed(status, summary, entries),
         });
     }
 
@@ -434,7 +439,11 @@ impl HookRunCell {
                     animations_enabled,
                 );
             }
-            HookRunState::Completed { status, entries } => {
+            HookRunState::Completed {
+                status,
+                summary,
+                entries,
+            } => {
                 let status_text = format!("{status:?}").to_lowercase();
                 let bullet = hook_completed_bullet(*status, entries);
                 lines.push(
@@ -445,6 +454,9 @@ impl HookRunCell {
                     ]
                     .into(),
                 );
+                if let Some(summary) = summary {
+                    lines.push(format!("  摘要：{summary}").into());
+                }
                 for entry in entries {
                     let prefix = hook_output_prefix(entry.kind);
                     let mut output_lines = entry.text.split('\n');
@@ -475,8 +487,16 @@ impl HookRunState {
     }
 
     /// Creates the persistent final state for a hook with visible output or a notable status.
-    fn completed(status: HookRunStatus, entries: Vec<HookOutputEntry>) -> Self {
-        Self::Completed { status, entries }
+    fn completed(
+        status: HookRunStatus,
+        summary: Option<String>,
+        entries: Vec<HookOutputEntry>,
+    ) -> Self {
+        Self::Completed {
+            status,
+            summary,
+            entries,
+        }
     }
 
     /// Returns true while the run is still waiting for a completion event or timer cleanup.
@@ -502,9 +522,9 @@ impl HookRunState {
     /// Returns true for completed runs that should survive outside the active cell.
     fn has_persistent_output(&self) -> bool {
         match self {
-            HookRunState::Completed { status, entries } => {
-                *status != HookRunStatus::Completed || !entries.is_empty()
-            }
+            HookRunState::Completed {
+                status, entries, ..
+            } => *status != HookRunStatus::Completed || !entries.is_empty(),
             HookRunState::PendingReveal { .. }
             | HookRunState::VisibleRunning { .. }
             | HookRunState::QuietLinger { .. } => false,
@@ -692,7 +712,13 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
 
 /// Returns true for hook completions that should be invisible in history.
 fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
-    run.status == HookRunStatus::Completed && run.entries.is_empty()
+    run.status == HookRunStatus::Completed
+        && run.entries.is_empty()
+        && run
+            .status_message
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
 }
 
 fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {

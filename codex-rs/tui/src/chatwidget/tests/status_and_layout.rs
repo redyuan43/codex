@@ -3049,6 +3049,41 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
 }
 
 #[tokio::test]
+async fn completed_hook_with_status_message_renders_summary_without_entries() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "user-prompt-submit:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::UserPromptSubmit,
+            Some("Applying OMX prompt routing"),
+        ),
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    handle_hook_completed(
+        &mut chat,
+        hook_run_summary(
+            "user-prompt-submit:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::UserPromptSubmit,
+            codex_app_server_protocol::HookRunStatus::Completed,
+            Some("Applying OMX prompt routing"),
+            Vec::new(),
+        ),
+    );
+
+    let history = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_chatwidget_snapshot!(
+        "completed_hook_with_status_message_renders_summary_without_entries_snapshot",
+        history
+    );
+}
+
+#[tokio::test]
 async fn quiet_hook_linger_starts_when_delayed_redraw_reveals_hook() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
