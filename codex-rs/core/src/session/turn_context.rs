@@ -5,7 +5,7 @@ use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_core_skills::HostLoadedSkills;
 use codex_model_provider::SharedModelProvider;
-use codex_model_provider::create_model_provider;
+use codex_model_provider::create_model_provider_with_id;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -485,7 +485,16 @@ impl Session {
         );
         let session_source = session_configuration.session_source.clone();
         let auth_manager_for_context = auth_manager.clone();
-        let provider_for_context = create_model_provider(provider, auth_manager);
+        let provider_for_context = create_model_provider_with_id(
+            Some(
+                session_configuration
+                    .original_config_do_not_use
+                    .model_provider_id
+                    .clone(),
+            ),
+            provider,
+            auth_manager,
+        );
         let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(

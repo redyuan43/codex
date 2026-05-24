@@ -74,6 +74,8 @@ fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
 struct TestModelsEndpoint {
     has_command_auth: bool,
     uses_codex_backend: bool,
+    supports_unauthenticated_model_catalog: bool,
+    model_catalog_is_authoritative: bool,
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
 }
@@ -83,6 +85,8 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: true,
+            supports_unauthenticated_model_catalog: false,
+            model_catalog_is_authoritative: false,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
         })
@@ -92,6 +96,19 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: false,
+            supports_unauthenticated_model_catalog: false,
+            model_catalog_is_authoritative: false,
+            responses: Mutex::new(responses.into()),
+            fetch_count: AtomicUsize::new(0),
+        })
+    }
+
+    fn authoritative_unauthenticated(responses: Vec<Vec<ModelInfo>>) -> Arc<Self> {
+        Arc::new(Self {
+            has_command_auth: false,
+            uses_codex_backend: false,
+            supports_unauthenticated_model_catalog: true,
+            model_catalog_is_authoritative: true,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
         })
@@ -164,6 +181,14 @@ impl ModelsEndpointClient for TestModelsEndpoint {
 
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
         Box::pin(async { self.uses_codex_backend })
+    }
+
+    fn supports_unauthenticated_model_catalog(&self) -> bool {
+        self.supports_unauthenticated_model_catalog
+    }
+
+    fn model_catalog_is_authoritative(&self) -> bool {
+        self.model_catalog_is_authoritative
     }
 
     fn list_models<'a>(
@@ -505,6 +530,8 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
     let endpoint = Arc::new(TestModelsEndpoint {
         has_command_auth: true,
         uses_codex_backend: false,
+        supports_unauthenticated_model_catalog: false,
+        model_catalog_is_authoritative: false,
         responses: Mutex::new(vec![remote_models.clone()].into()),
         fetch_count: AtomicUsize::new(0),
     });
@@ -550,6 +577,36 @@ async fn refresh_available_models_uses_cache_when_fresh() {
         endpoint.fetch_count(),
         1,
         "cache hit should avoid a second model fetch"
+    );
+}
+
+#[tokio::test]
+async fn refresh_available_models_refetches_authoritative_unauthenticated_catalog() {
+    let initial_models = vec![remote_model("local-old", "Local Old", /*priority*/ 1)];
+    let updated_models = vec![remote_model("local-new", "Local New", /*priority*/ 2)];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::authoritative_unauthenticated(vec![
+        initial_models.clone(),
+        updated_models.clone(),
+    ]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("initial refresh succeeds");
+    assert_eq!(manager.get_remote_models().await, initial_models);
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("second refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, updated_models);
+    assert_eq!(
+        endpoint.fetch_count(),
+        2,
+        "authoritative local catalogs should not be replaced by cache"
     );
 }
 
