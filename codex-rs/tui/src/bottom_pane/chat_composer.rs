@@ -351,6 +351,7 @@ pub(crate) struct ChatComposer {
     frame_requester: Option<FrameRequester>,
     attachments: AttachmentState,
     placeholder_text: String,
+    hook_summary_hint: Option<String>,
     is_task_running: bool,
     queue_submissions: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
@@ -524,6 +525,7 @@ impl ChatComposer {
             frame_requester: None,
             attachments: AttachmentState::default(),
             placeholder_text,
+            hook_summary_hint: None,
             is_task_running: false,
             queue_submissions: false,
             pending_slash_command_history: None,
@@ -1344,6 +1346,11 @@ impl ChatComposer {
     /// Update the placeholder text without changing input enablement.
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.placeholder_text = placeholder;
+    }
+
+    pub(crate) fn set_hook_summary_hint(&mut self, summary: String) {
+        let summary = summary.trim();
+        self.hook_summary_hint = (!summary.is_empty()).then(|| summary.to_string());
     }
 
     /// Move the cursor to the end of the current text buffer.
@@ -4410,8 +4417,8 @@ impl ChatComposer {
             );
         }
 
-        let mut state = self.draft.textarea_state.borrow_mut();
         let textarea_is_empty = self.draft.textarea.text().is_empty() && !self.draft.is_bash_mode;
+        let mut state = self.draft.textarea_state.borrow_mut();
         if self.draft.input_enabled {
             if let Some(mask_char) = mask_char {
                 self.draft
@@ -4446,7 +4453,11 @@ impl ChatComposer {
         }
         if !self.draft.input_enabled || textarea_is_empty {
             let text = if self.draft.input_enabled {
-                self.placeholder_text.as_str().to_string()
+                if let Some(summary) = self.hook_summary_hint.as_deref() {
+                    format!("摘要：{summary}")
+                } else {
+                    self.placeholder_text.as_str().to_string()
+                }
             } else {
                 self.draft
                     .input_disabled_placeholder

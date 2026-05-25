@@ -1985,6 +1985,12 @@
             "string",
             "null"
           ]
+        },
+        "summaryInput": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

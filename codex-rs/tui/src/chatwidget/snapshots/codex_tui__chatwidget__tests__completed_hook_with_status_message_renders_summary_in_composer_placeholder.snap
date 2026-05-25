@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"                                                                                "
+"› 摘要：已经完成文档更新，并补充了运行验证结果。                                " Hidden by multi-width symbols: [(3, " "), (5, " "), (7, " "), (9, " "), (11, " "), (13, " "), (15, " "), (17, " "), (19, " "), (21, " "), (23, " "), (25, " "), (27, " "), (29, " "), (31, " "), (33, " "), (35, " "), (37, " "), (39, " "), (41, " "), (43, " "), (45, " "), (47, " ")]
+"                                                                                "
+"  gpt-5.5 default · /tmp/project                                                "

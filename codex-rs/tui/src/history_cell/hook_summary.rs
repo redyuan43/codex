@@ -49,7 +49,7 @@ struct ChatCompletionMessage {
     content: Option<String>,
 }
 
-pub(super) fn summarize_hook_run(run: &HookRunSummary) -> Option<String> {
+pub(crate) fn summarize_hook_run(run: &HookRunSummary) -> Option<String> {
     summarize_hook_run_with_remote(run, remote_hook_summary)
 }
 
@@ -92,7 +92,7 @@ fn remote_hook_summary(run: &HookRunSummary) -> Option<String> {
         "messages": [
             {
                 "role": "system",
-                "content": "你是 check_boards 的本地播报摘要器。只输出简体中文纯文本，不要 Markdown，不要前缀。用 1 到 2 句、80 个中文字以内，总结诊断结论、风险和下一步。不要复述设备名、文件夹名、目录路径或来源信息。"
+                "content": "你是 check_boards 的本地播报摘要器。只输出简体中文纯文本，不要 Markdown，不要前缀。用 1 到 2 句、80 个中文字以内，基于 Codex 最后一段输出做简短内容描述。不要判断风险，不要编造下一步，不要复述设备名、文件夹名、目录路径或来源信息。"
             },
             {
                 "role": "user",
@@ -164,6 +164,13 @@ fn chat_completion(url: &str, payload: &str) -> Result<String, String> {
 }
 
 fn fallback_hook_summary(run: &HookRunSummary) -> Option<String> {
+    if let Some(summary_input) = run.summary_input.as_deref() {
+        let text = clean_hook_summary_text(summary_input);
+        if !text.is_empty() {
+            return Some(limit_summary_chars(&text, 90));
+        }
+    }
+
     let selected = run
         .entries
         .iter()
@@ -232,6 +239,11 @@ fn fallback_hook_summary(run: &HookRunSummary) -> Option<String> {
 }
 
 fn hook_body(run: &HookRunSummary) -> String {
+    if let Some(summary_input) = run.summary_input.as_deref()
+        && !summary_input.trim().is_empty()
+    {
+        return format!("last_assistant_message：{summary_input}");
+    }
     let mut lines = Vec::new();
     if let Some(status_message) = run.status_message.as_deref()
         && !status_message.trim().is_empty()
@@ -471,6 +483,21 @@ mod tests {
     }
 
     #[test]
+    fn hook_body_uses_summary_input_without_status_noise() {
+        let mut run = hook_run_summary(Vec::new());
+        run.summary_input = Some("已经完成文档更新，并补充了运行验证结果。".to_string());
+
+        assert_eq!(
+            hook_body(&run),
+            "last_assistant_message：已经完成文档更新，并补充了运行验证结果。"
+        );
+        assert_eq!(
+            summarize_hook_run_with_remote(&run, |_| None),
+            Some("已经完成文档更新，并补充了运行验证结果。".to_string())
+        );
+    }
+
+    #[test]
     fn cleans_remote_summary_like_check_boards() {
         assert_eq!(
             clean_remote_summary(
@@ -492,6 +519,7 @@ mod tests {
             display_order: 0,
             status: HookRunStatus::Stopped,
             status_message: Some("checking input policy".to_string()),
+            summary_input: None,
             started_at: 1,
             completed_at: Some(11),
             duration_ms: Some(10),

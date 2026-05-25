@@ -454,6 +454,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn show_hook_summary_hint(&mut self, summary: impl Into<String>) {
+        self.composer.set_hook_summary_hint(summary.into());
+        self.request_redraw();
+    }
+
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
         self.composer.set_vim_enabled(enabled);
         self.request_redraw();

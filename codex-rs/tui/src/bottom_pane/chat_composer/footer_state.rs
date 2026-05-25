@@ -1,5 +1,7 @@
 //! Footer and status-row presentation state for the chat composer.
 
+#[cfg(test)]
+use std::time::Duration;
 use std::time::Instant;
 
 use ratatui::text::Line;
@@ -8,8 +10,6 @@ use crate::bottom_pane::footer::CollaborationModeIndicator;
 use crate::bottom_pane::footer::FooterMode;
 use crate::bottom_pane::footer::GoalStatusIndicator;
 use crate::key_hint::KeyBinding;
-#[cfg(test)]
-use std::time::Duration;
 
 pub(super) struct FooterState {
     pub(super) quit_shortcut_expires_at: Option<Instant>,
