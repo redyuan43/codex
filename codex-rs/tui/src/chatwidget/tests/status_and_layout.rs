@@ -2830,6 +2830,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                summary_input: None,
                 started_at: 1,
                 completed_at: None,
                 duration_ms: None,
@@ -2853,6 +2854,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 display_order: 0,
                 status: AppServerHookRunStatus::Stopped,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                summary_input: None,
                 started_at: 1,
                 completed_at: Some(11),
                 duration_ms: Some(10),
@@ -2943,8 +2945,11 @@ async fn completed_hook_with_no_entries_stays_out_of_history() {
 }
 
 #[tokio::test]
-async fn completed_hook_with_status_message_renders_summary_without_entries() {
+async fn completed_hook_with_status_message_renders_summary_in_composer_placeholder() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.bottom_pane
+        .set_placeholder_text("Write tests for @filename".to_string());
 
     handle_hook_started(
         &mut chat,
@@ -2956,25 +2961,73 @@ async fn completed_hook_with_status_message_renders_summary_without_entries() {
     );
     assert!(drain_insert_history(&mut rx).is_empty());
 
-    handle_hook_completed(
-        &mut chat,
-        hook_run_summary(
-            "user-prompt-submit:0:/tmp/hooks.json",
-            codex_app_server_protocol::HookEventName::UserPromptSubmit,
-            codex_app_server_protocol::HookRunStatus::Completed,
-            Some("Applying OMX prompt routing"),
-            Vec::new(),
-        ),
+    let mut completed = hook_run_summary(
+        "user-prompt-submit:0:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::UserPromptSubmit,
+        codex_app_server_protocol::HookRunStatus::Completed,
+        Some("Applying OMX prompt routing"),
+        Vec::new(),
+    );
+    completed.summary_input = Some("已经完成文档更新，并补充了运行验证结果。".to_string());
+    handle_hook_completed(&mut chat, completed);
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw hook summary footer");
+    assert_chatwidget_snapshot!(
+        "completed_hook_with_status_message_renders_summary_in_composer_placeholder",
+        normalized_backend_snapshot(terminal.backend())
+    );
+}
+
+#[tokio::test]
+async fn completed_hook_summary_is_hidden_when_composer_has_draft() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.show_welcome_banner = false;
+    chat.bottom_pane.set_composer_text(
+        "Write tests for @filename".to_string(),
+        Vec::new(),
+        Vec::new(),
     );
 
-    let history = drain_insert_history(&mut rx)
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .collect::<String>();
-    assert_chatwidget_snapshot!(
-        "completed_hook_with_status_message_renders_summary_without_entries_snapshot",
-        history
+    handle_hook_started(
+        &mut chat,
+        hook_started_run(
+            "user-prompt-submit:0:/tmp/hooks.json",
+            codex_app_server_protocol::HookEventName::UserPromptSubmit,
+            Some("Applying OMX prompt routing"),
+        ),
     );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    let mut completed = hook_run_summary(
+        "user-prompt-submit:0:/tmp/hooks.json",
+        codex_app_server_protocol::HookEventName::UserPromptSubmit,
+        codex_app_server_protocol::HookRunStatus::Completed,
+        Some("Applying OMX prompt routing"),
+        Vec::new(),
+    );
+    completed.summary_input = Some("已经完成文档更新，并补充了运行验证结果。".to_string());
+    handle_hook_completed(&mut chat, completed);
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("draw hook summary with draft");
+    let rendered = normalized_backend_snapshot(terminal.backend());
+    assert!(rendered.contains("Write tests for @filename"));
+    assert!(!rendered.contains("摘要："));
 }
 
 #[tokio::test]
@@ -3485,6 +3538,7 @@ fn hook_run_summary(
         display_order: 0,
         status,
         status_message: status_message.map(str::to_string),
+        summary_input: None,
         started_at: 1,
         completed_at: (status != codex_app_server_protocol::HookRunStatus::Running).then_some(2),
         duration_ms: (status != codex_app_server_protocol::HookRunStatus::Running).then_some(1),

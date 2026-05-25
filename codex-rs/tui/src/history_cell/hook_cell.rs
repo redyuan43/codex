@@ -274,6 +274,13 @@ impl HookCell {
             .min()
     }
 
+    pub(crate) fn latest_completed_summary(&self) -> Option<&str> {
+        self.runs
+            .iter()
+            .rev()
+            .find_map(HookRunCell::completed_summary)
+    }
+
     #[cfg(test)]
     pub(crate) fn expire_quiet_runs_now_for_test(&mut self) {
         for run in &mut self.runs {
@@ -419,6 +426,19 @@ impl HookRunCell {
                 event_name: self.event_name,
                 status_message: self.status_message.clone(),
             })
+    }
+
+    fn completed_summary(&self) -> Option<&str> {
+        match &self.state {
+            HookRunState::Completed {
+                summary: Some(summary),
+                ..
+            } => Some(summary.as_str()),
+            HookRunState::Completed { summary: None, .. }
+            | HookRunState::PendingReveal { .. }
+            | HookRunState::VisibleRunning { .. }
+            | HookRunState::QuietLinger { .. } => None,
+        }
     }
 
     /// Appends the lines for a single, ungrouped hook run.
@@ -701,13 +721,7 @@ pub(crate) fn new_completed_hook_cell(run: HookRunSummary, animations_enabled: b
 
 /// Returns true for hook completions that should be invisible in history.
 fn hook_run_is_quiet_success(run: &HookRunSummary) -> bool {
-    run.status == HookRunStatus::Completed
-        && run.entries.is_empty()
-        && run
-            .status_message
-            .as_deref()
-            .map(str::trim)
-            .is_none_or(str::is_empty)
+    run.status == HookRunStatus::Completed && run.entries.is_empty()
 }
 
 fn hook_completed_bullet(status: HookRunStatus, entries: &[HookOutputEntry]) -> Span<'static> {
@@ -830,6 +844,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn completed_hook_with_status_message_is_quiet_after_live_flush() {
+        let mut cell = HookCell::new_active(
+            hook_run_summary("hook-1"),
+            /*animations_enabled*/ false,
+        );
+        let mut completed = hook_run_summary("hook-1");
+        completed.status = HookRunStatus::Completed;
+
+        assert!(cell.complete_run(completed));
+
+        assert_eq!(cell.latest_completed_summary(), None);
+        assert!(cell.take_completed_persistent_runs().is_none());
+    }
+
     fn hook_run_summary(id: &str) -> HookRunSummary {
         HookRunSummary {
             id: id.to_string(),
@@ -842,6 +871,7 @@ mod tests {
             display_order: 0,
             status: HookRunStatus::Running,
             status_message: Some("checking output policy".to_string()),
+            summary_input: None,
             started_at: 1,
             completed_at: None,
             duration_ms: None,

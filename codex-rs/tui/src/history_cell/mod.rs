@@ -124,6 +124,7 @@ pub(crate) use exec::*;
 pub(crate) use hook_cell::HookCell;
 pub(crate) use hook_cell::new_active_hook_cell;
 pub(crate) use hook_cell::new_completed_hook_cell;
+pub(crate) use hook_summary::summarize_hook_run;
 pub(crate) use mcp::*;
 pub(crate) use messages::*;
 pub(crate) use notices::*;

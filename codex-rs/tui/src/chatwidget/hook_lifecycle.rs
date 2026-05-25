@@ -29,6 +29,15 @@ impl ChatWidget {
         &mut self,
         completed: codex_app_server_protocol::HookRunSummary,
     ) {
+        let quiet_completed_summary = (completed.status
+            == codex_app_server_protocol::HookRunStatus::Completed
+            && completed.entries.is_empty()
+            && completed
+                .summary_input
+                .as_deref()
+                .is_some_and(|input| !input.trim().is_empty()))
+        .then(|| history_cell::summarize_hook_run(&completed))
+        .flatten();
         let completed_existing_run = self
             .active_hook_cell
             .as_mut()
@@ -51,6 +60,15 @@ impl ChatWidget {
                     }
                 }
             }
+        }
+        let summary = quiet_completed_summary.or_else(|| {
+            self.active_hook_cell
+                .as_ref()
+                .and_then(HookCell::latest_completed_summary)
+                .map(str::to_string)
+        });
+        if let Some(summary) = summary {
+            self.bottom_pane.show_hook_summary_hint(summary);
         }
         self.flush_completed_hook_output();
         self.finish_active_hook_cell_if_idle();

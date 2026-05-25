@@ -1430,6 +1430,7 @@ pub struct HookRunSummary {
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
+    pub summary_input: Option<String>,
     #[ts(type = "number")]
     pub started_at: i64,
     #[ts(type = "number | null")]

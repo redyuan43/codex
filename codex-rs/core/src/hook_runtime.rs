@@ -900,6 +900,7 @@ mod tests {
             display_order: 0,
             status,
             status_message: None,
+            summary_input: None,
             started_at: 10,
             completed_at: Some(37),
             duration_ms: Some(27),
