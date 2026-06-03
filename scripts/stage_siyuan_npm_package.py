@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and pack a Linux x64 self-contained siyuan Codex npm package."""
+"""Stage and pack a Linux self-contained siyuan Codex npm package."""
 
 from __future__ import annotations
 
@@ -14,7 +14,11 @@ import tempfile
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CODEX_CLI_ROOT = REPO_ROOT / "codex-cli"
-TARGET_TRIPLE = "x86_64-unknown-linux-musl"
+DEFAULT_TARGET_TRIPLE = "x86_64-unknown-linux-musl"
+CPU_BY_TARGET_TRIPLE = {
+    "x86_64-unknown-linux-musl": "x64",
+    "aarch64-unknown-linux-musl": "arm64",
+}
 PACKAGE_NAME = "@ivanfeng3333/siyuan-codex"
 DEFAULT_VERSION = "0.18.0-siyuan.1"
 
@@ -31,8 +35,17 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
         help=(
-            "Directory containing the canonical Codex package at "
-            f"{TARGET_TRIPLE}/."
+            "Directory containing canonical Codex packages named by target triple."
+        ),
+    )
+    parser.add_argument(
+        "--target",
+        action="append",
+        choices=sorted(CPU_BY_TARGET_TRIPLE),
+        default=[],
+        help=(
+            "Target triple to include. May be passed more than once. "
+            f"Default: {DEFAULT_TARGET_TRIPLE}."
         ),
     )
     parser.add_argument(
@@ -60,11 +73,12 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
     return staging_dir, False
 
 
-def write_package_json(staging_dir: Path, version: str) -> None:
+def write_package_json(staging_dir: Path, version: str, targets: list[str]) -> None:
+    cpus = sorted({CPU_BY_TARGET_TRIPLE[target] for target in targets})
     package_json = {
         "name": PACKAGE_NAME,
         "version": version,
-        "description": "Siyuan-branded Codex CLI for Linux x64.",
+        "description": "Siyuan-branded Codex CLI for Linux.",
         "license": "Apache-2.0",
         "type": "module",
         "bin": {
@@ -87,9 +101,7 @@ def write_package_json(staging_dir: Path, version: str) -> None:
         "os": [
             "linux",
         ],
-        "cpu": [
-            "x64",
-        ],
+        "cpu": cpus,
     }
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
         json.dump(package_json, out, indent=2)
@@ -101,26 +113,30 @@ def copy_if_exists(src: Path, dest: Path) -> None:
         shutil.copy2(src, dest)
 
 
-def stage_sources(staging_dir: Path, vendor_root: Path, version: str) -> None:
-    target_vendor = vendor_root.resolve() / TARGET_TRIPLE
-    if not target_vendor.exists():
-        raise RuntimeError(f"Missing Linux x64 vendor target: {target_vendor}")
-    if not (target_vendor / "bin" / "codex").exists():
-        raise RuntimeError(
-            f"Missing Codex binary in vendor target: {target_vendor / 'bin' / 'codex'}"
-        )
-
+def stage_sources(
+    staging_dir: Path, vendor_root: Path, version: str, targets: list[str]
+) -> None:
     bin_dir = staging_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
 
-    vendor_dest = staging_dir / "vendor" / TARGET_TRIPLE
-    vendor_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(target_vendor, vendor_dest)
+    for target in targets:
+        target_vendor = vendor_root.resolve() / target
+        if not target_vendor.exists():
+            raise RuntimeError(f"Missing Linux vendor target: {target_vendor}")
+        if not (target_vendor / "bin" / "codex").exists():
+            raise RuntimeError(
+                "Missing Codex binary in vendor target: "
+                f"{target_vendor / 'bin' / 'codex'}"
+            )
+
+        vendor_dest = staging_dir / "vendor" / target
+        vendor_dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(target_vendor, vendor_dest)
 
     copy_if_exists(REPO_ROOT / "README.md", staging_dir / "README.md")
     copy_if_exists(REPO_ROOT / "LICENSE", staging_dir / "LICENSE")
-    write_package_json(staging_dir, version)
+    write_package_json(staging_dir, version, targets)
 
 
 def run_npm_pack(staging_dir: Path, output_dir: Path, version: str) -> Path:
@@ -159,9 +175,10 @@ def run_npm_pack(staging_dir: Path, output_dir: Path, version: str) -> Path:
 
 def main() -> int:
     args = parse_args()
+    targets = args.target or [DEFAULT_TARGET_TRIPLE]
     staging_dir, created_temp = prepare_staging_dir(args.staging_dir)
     try:
-        stage_sources(staging_dir, args.vendor_root, args.version)
+        stage_sources(staging_dir, args.vendor_root, args.version, targets)
         output_path = run_npm_pack(staging_dir, args.output_dir, args.version)
         print(f"Staged {PACKAGE_NAME}@{args.version}")
         if not created_temp:
