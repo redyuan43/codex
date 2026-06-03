@@ -64,15 +64,20 @@ jobs:
       - name: Build canonical Codex package
         run: |
           set -euo pipefail
-          python3 scripts/build_codex_package.py \
+          cargo build \
+            --manifest-path codex-rs/Cargo.toml \
             --target "$TARGET" \
-            --variant codex \
-            --cargo-profile release \
-            --package-dir "dist/siyuan-vendor/$TARGET" \
-            --force
+            --release \
+            --bin codex \
+            --bin codex-linux-sandbox
+
+          vendor_dir="dist/siyuan-vendor/$TARGET"
+          mkdir -p "$vendor_dir/codex" "$vendor_dir/path"
+          cp "codex-rs/target/$TARGET/release/codex" "$vendor_dir/codex/codex"
+          cp "codex-rs/target/$TARGET/release/codex-linux-sandbox" "$vendor_dir/path/codex-linux-sandbox"
 
       - name: Smoke test native vendor package
-        run: "dist/siyuan-vendor/$TARGET/bin/codex --version"
+        run: "dist/siyuan-vendor/$TARGET/codex/codex --version"
 
       - name: Upload vendor package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

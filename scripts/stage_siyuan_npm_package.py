@@ -124,10 +124,10 @@ def stage_sources(
         target_vendor = vendor_root.resolve() / target
         if not target_vendor.exists():
             raise RuntimeError(f"Missing Linux vendor target: {target_vendor}")
-        if not (target_vendor / "bin" / "codex").exists():
+        if not (target_vendor / "codex" / "codex").exists():
             raise RuntimeError(
                 "Missing Codex binary in vendor target: "
-                f"{target_vendor / 'bin' / 'codex'}"
+                f"{target_vendor / 'codex' / 'codex'}"
             )
 
         vendor_dest = staging_dir / "vendor" / target
