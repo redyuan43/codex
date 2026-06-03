@@ -1,0 +1,78 @@
+name: siyuan-npm-linux-x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "npm package version"
+        required: true
+        default: "0.18.0-siyuan.1"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish Linux x64 npm package
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      TARGET: x86_64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          scope: "@redyuan43"
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+          bash .github/scripts/install-musl-build-tools.sh
+
+      - name: Build canonical Codex package
+        run: |
+          set -euo pipefail
+          python3 scripts/build_codex_package.py \
+            --target "$TARGET" \
+            --variant codex \
+            --cargo-profile release \
+            --package-dir "dist/siyuan-vendor/$TARGET" \
+            --force
+
+      - name: Stage npm tarball
+        run: |
+          set -euo pipefail
+          python3 scripts/stage_siyuan_npm_package.py \
+            --version "$VERSION" \
+            --vendor-root dist/siyuan-vendor \
+            --output-dir dist/siyuan-npm
+
+      - name: Smoke test npm tarball
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/siyuan-codex-prefix"
+          npm install -g "dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz" --prefix "$prefix"
+          "$prefix/bin/siyuan" --version
+          "$prefix/bin/codex" --version
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: siyuan-codex-npm-${{ inputs.version }}
+          path: dist/siyuan-npm/*.tgz
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz" --access public
