@@ -113,6 +113,10 @@ def copy_if_exists(src: Path, dest: Path) -> None:
         shutil.copy2(src, dest)
 
 
+def make_executable(path: Path) -> None:
+    path.chmod(path.stat().st_mode | 0o755)
+
+
 def stage_sources(
     staging_dir: Path, vendor_root: Path, version: str, targets: list[str]
 ) -> None:
@@ -133,6 +137,10 @@ def stage_sources(
         vendor_dest = staging_dir / "vendor" / target
         vendor_dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(target_vendor, vendor_dest)
+        make_executable(vendor_dest / "codex" / "codex")
+        sandbox_path = vendor_dest / "path" / "codex-linux-sandbox"
+        if sandbox_path.exists():
+            make_executable(sandbox_path)
 
     copy_if_exists(REPO_ROOT / "README.md", staging_dir / "README.md")
     copy_if_exists(REPO_ROOT / "LICENSE", staging_dir / "LICENSE")
