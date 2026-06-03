@@ -15,7 +15,7 @@ import tempfile
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CODEX_CLI_ROOT = REPO_ROOT / "codex-cli"
 TARGET_TRIPLE = "x86_64-unknown-linux-musl"
-PACKAGE_NAME = "@redyuan43/siyuan-codex"
+PACKAGE_NAME = "@ivanfeng3333/siyuan-codex"
 DEFAULT_VERSION = "0.18.0-siyuan.1"
 
 
