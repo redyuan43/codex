@@ -9,7 +9,7 @@ on:
         default: "0.18.0-siyuan.1"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -198,6 +198,36 @@ jobs:
         with:
           name: siyuan-codex-npm-${{ inputs.version }}
           path: dist/siyuan-npm/*.tgz
+
+      - name: Publish GitHub Release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_tag="siyuan-v${VERSION}"
+          tarball="dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz"
+          notes_file="$RUNNER_TEMP/siyuan-release-notes.md"
+          cat > "$notes_file" <<EOF
+          Siyuan Codex npm tarball for Linux x64 and Linux ARM64.
+
+          Install:
+
+          \`\`\`bash
+          npm install -g https://github.com/redyuan43/codex/releases/download/${release_tag}/siyuan-codex-npm-${VERSION}.tgz
+          \`\`\`
+
+          This release contains x86_64-unknown-linux-musl and aarch64-unknown-linux-musl vendor binaries.
+          EOF
+
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" "$tarball" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$release_tag" "$tarball" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Siyuan Codex ${VERSION}" \
+              --notes-file "$notes_file"
+          fi
 
       - name: Publish to npm
         env:
