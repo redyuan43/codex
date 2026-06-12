@@ -5,6 +5,7 @@ use crate::config::ConstraintError;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_extension_api::ExtensionDataInit;
+use codex_login::default_client::CODEX_SERVER_COMPAT_VERSION;
 use codex_protocol::SessionId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
@@ -761,7 +762,7 @@ impl Session {
             }
             let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
                 conversation_id: Some(thread_id.to_string()),
-                app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                app_version: Some(CODEX_SERVER_COMPAT_VERSION.to_string()),
                 user_account_id: account_id,
                 auth_mode: auth_mode.map(|mode| mode.to_string()),
                 originator: Some(originator),

@@ -678,6 +678,14 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
     );
 }
 
+#[test]
+fn client_version_to_whole_uses_server_compat_version() {
+    assert_eq!(
+        crate::client_version_to_whole(),
+        codex_login::default_client::CODEX_SERVER_COMPAT_VERSION
+    );
+}
+
 #[tokio::test]
 async fn refresh_available_models_drops_removed_remote_models() {
     let initial_models = vec![remote_model(
