@@ -28,10 +28,12 @@ jobs:
       VERSION: ${{ inputs.version }}
       TARGET: ${{ matrix.target }}
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      CARGO_PROFILE_RELEASE_LTO: thin
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
       AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
@@ -151,7 +153,14 @@ jobs:
             --manifest-path codex-rs/Cargo.toml \
             --target "$TARGET" \
             --release \
-            --bin codex \
+            -p codex-cli \
+            --bin codex
+
+          cargo build \
+            --manifest-path codex-rs/Cargo.toml \
+            --target "$TARGET" \
+            --release \
+            -p codex-linux-sandbox \
             --bin codex-linux-sandbox
           kill "$heartbeat_pid" 2>/dev/null || true
           trap - EXIT
