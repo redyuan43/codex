@@ -23,6 +23,7 @@ jobs:
   build:
     name: Build Linux package - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 90
     env:
       VERSION: ${{ inputs.version }}
       TARGET: ${{ matrix.target }}
@@ -135,14 +136,25 @@ jobs:
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
 
       - name: Build canonical Codex package
+        timeout-minutes: 60
         run: |
           set -euo pipefail
+          (
+            while true; do
+              echo "cargo build still running at $(date -u +%FT%TZ)"
+              sleep 60
+            done
+          ) &
+          heartbeat_pid="$!"
+          trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
           cargo build \
             --manifest-path codex-rs/Cargo.toml \
             --target "$TARGET" \
             --release \
             --bin codex \
             --bin codex-linux-sandbox
+          kill "$heartbeat_pid" 2>/dev/null || true
+          trap - EXIT
 
           vendor_dir="dist/siyuan-vendor/$TARGET"
           mkdir -p "$vendor_dir/codex" "$vendor_dir/path"
