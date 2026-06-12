@@ -6,8 +6,8 @@
 
 # Test announcement only for local build version until 2027-05-10 excluded
 [[announcements]]
-content = "当前是B.U.S.Corp公司的siyuan模型0.18 Version, Provider: 冯源"
-version_regex = "^0\\.0\\.0$"
+content = "当前是B.U.S.Corp公司的siyuan模型0.18.0-siyuan.6 Version, Provider: 冯源"
+version_regex = "^0\\.18\\.0-siyuan\\.6$"
 to_date = "2027-05-10"
 
 [[announcements]]

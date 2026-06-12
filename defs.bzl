@@ -275,7 +275,7 @@ def codex_rust_crate(
             deps = all_crate_deps(build = True),
             data = build_script_data,
             # Some build script deps sniff version-related env vars...
-            version = "0.0.0",
+            version = "0.18.0-siyuan.6",
         )
 
         maybe_deps += [name + "-build-script"]
