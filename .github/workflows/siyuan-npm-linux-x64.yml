@@ -1,6 +1,9 @@
 name: siyuan-npm-linux
 
 on:
+  push:
+    branches:
+      - siyuan-local-codex
   workflow_dispatch:
     inputs:
       version:
@@ -25,7 +28,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 90
     env:
-      VERSION: ${{ inputs.version }}
+      VERSION: ${{ inputs.version || '0.139.0-siyuan.1' }}
       TARGET: ${{ matrix.target }}
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_PROFILE_RELEASE_LTO: "false"
@@ -184,7 +187,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ inputs.version }}
+      VERSION: ${{ inputs.version || '0.139.0-siyuan.1' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -225,7 +228,7 @@ jobs:
       - name: Upload npm tarball
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: siyuan-codex-npm-${{ inputs.version }}
+          name: siyuan-codex-npm-${{ env.VERSION }}
           path: dist/siyuan-npm/*.tgz
 
       - name: Publish GitHub Release asset
