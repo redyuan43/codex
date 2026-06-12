@@ -472,12 +472,12 @@ target_app = "cli"
 version_regex = "^0\\.0\\.0$"
 
 [[announcements]]
-content = "当前是B.U.S.Corp公司的siyuan模型0.18.0-siyuan.6 Version, Provider: 冯源"
+content = "当前是B.U.S.Corp公司的siyuan模型0.139.0-siyuan.1 Version, Provider: 冯源"
         "#;
 
         assert_eq!(
             Some(
-                "当前是B.U.S.Corp公司的siyuan模型0.18.0-siyuan.6 Version, Provider: 冯源"
+                "当前是B.U.S.Corp公司的siyuan模型0.139.0-siyuan.1 Version, Provider: 冯源"
                     .to_string()
             ),
             parse_announcement_tip_toml(toml, /*plan*/ None)
