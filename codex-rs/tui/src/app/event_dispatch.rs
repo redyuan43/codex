@@ -1366,7 +1366,10 @@ impl App {
             } => {
                 match crate::config_update::write_config_batch(
                     app_server.request_handle(),
-                    crate::config_update::build_model_selection_edits(model.as_str(), effort),
+                    crate::config_update::build_model_selection_edits(
+                        model.as_str(),
+                        effort.clone(),
+                    ),
                 )
                 .await
                 {

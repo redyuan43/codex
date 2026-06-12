@@ -224,7 +224,7 @@ impl ChatWidget {
                 .map(|preset| preset.default_reasoning_effort)
         });
         let next_effort = nearest_supported_effort(next_preset, requested_effort)
-            .or(Some(next_preset.default_reasoning_effort));
+            .or(Some(next_preset.default_reasoning_effort.clone()));
         self.apply_model_and_effort_for_all_modes_with_message(
             next_preset.model.clone(),
             next_effort,
@@ -290,18 +290,7 @@ fn next_reasoning_effort(
         };
     }
 
-    let current_rank = effort_rank(current_effort);
-    match direction {
-        ReasoningShortcutDirection::Lower => choices
-            .iter()
-            .rev()
-            .copied()
-            .find(|choice| effort_rank(*choice) < current_rank),
-        ReasoningShortcutDirection::Raise => choices
-            .iter()
-            .copied()
-            .find(|choice| effort_rank(*choice) > current_rank),
-    }
+    None
 }
 
 fn nearest_supported_effort(
@@ -310,13 +299,13 @@ fn nearest_supported_effort(
 ) -> Option<ReasoningEffortConfig> {
     let requested_effort = requested_effort?;
     let choices = reasoning_choices(preset);
-    let requested_rank = effort_rank(requested_effort);
+    let requested_rank = effort_rank(&requested_effort);
     choices
         .into_iter()
-        .min_by_key(|choice| (effort_rank(*choice) - requested_rank).abs())
+        .min_by_key(|choice| (effort_rank(choice) - requested_rank).abs())
 }
 
-fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
+fn effort_rank(effort: &ReasoningEffortConfig) -> i32 {
     match effort {
         ReasoningEffortConfig::None => 0,
         ReasoningEffortConfig::Minimal => 1,
@@ -324,6 +313,7 @@ fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
         ReasoningEffortConfig::Medium => 3,
         ReasoningEffortConfig::High => 4,
         ReasoningEffortConfig::XHigh => 5,
+        ReasoningEffortConfig::Custom(_) => 3,
     }
 }
 

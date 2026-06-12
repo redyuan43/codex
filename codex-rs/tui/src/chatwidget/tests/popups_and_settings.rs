@@ -2843,13 +2843,11 @@ async fn assert_reasoning_shortcuts_update_effort(
             "expected reasoning update event for {key_event:?}; events: {events:?}"
         );
         assert!(
-            events
-                .iter()
-                .all(|event| !matches!(
-                    event,
-                    AppEvent::PersistModelSelection { .. }
-                        | AppEvent::PersistModelSelectionWithMessage { .. }
-                )),
+            events.iter().all(|event| !matches!(
+                event,
+                AppEvent::PersistModelSelection { .. }
+                    | AppEvent::PersistModelSelectionWithMessage { .. }
+            )),
             "expected no model persistence event for {key_event:?}; events: {events:?}"
         );
     }

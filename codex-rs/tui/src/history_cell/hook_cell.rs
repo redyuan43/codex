@@ -460,9 +460,7 @@ impl HookRunCell {
                 );
             }
             HookRunState::Completed {
-                status,
-                summary,
-                entries,
+                status, entries, ..
             } => {
                 let status_text = format!("{status:?}").to_lowercase();
                 let bullet = hook_completed_bullet(*status, entries);
@@ -474,9 +472,6 @@ impl HookRunCell {
                     ]
                     .into(),
                 );
-                if let Some(summary) = summary {
-                    lines.push(format!("  摘要：{summary}").into());
-                }
                 for entry in entries {
                     let prefix = hook_output_prefix(entry.kind);
                     let mut output_lines = entry.text.split('\n');

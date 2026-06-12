@@ -538,12 +538,12 @@ impl ChatWidget {
         effort: Option<ReasoningEffortConfig>,
         message: String,
     ) {
-        self.apply_model_and_effort_without_persist(model.clone(), effort);
+        self.apply_model_and_effort_without_persist(model.clone(), effort.clone());
         if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
             self.app_event_tx
-                .send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+                .send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
             self.app_event_tx
-                .send(AppEvent::PersistPlanModeReasoningEffort(effort));
+                .send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
         }
         self.app_event_tx
             .send(AppEvent::PersistModelSelectionWithMessage {
