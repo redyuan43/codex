@@ -31,7 +31,9 @@ jobs:
       VERSION: ${{ inputs.version || '0.139.0-siyuan.1' }}
       TARGET: ${{ matrix.target }}
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_RELEASE_DEBUG: "false"
       CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_STRIP: "symbols"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
       AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
     strategy:

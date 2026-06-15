@@ -217,10 +217,6 @@ def stage_sources(
         vendor_dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(target_vendor, vendor_dest)
         make_executable(vendor_dest / "codex" / "codex")
-        bin_dir = vendor_dest / "bin"
-        bin_dir.mkdir(exist_ok=True)
-        shutil.copy2(vendor_dest / "codex" / "codex", bin_dir / "codex")
-        make_executable(bin_dir / "codex")
         sandbox_path = vendor_dest / "path" / "codex-linux-sandbox"
         if sandbox_path.exists():
             make_executable(sandbox_path)
