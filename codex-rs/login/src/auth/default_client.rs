@@ -36,6 +36,7 @@ pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(||
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
+pub const CODEX_SERVER_COMPAT_VERSION: &str = "0.139.0";
 
 pub use codex_config::ResidencyRequirement;
 
@@ -131,7 +132,7 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    let build_version = CODEX_SERVER_COMPAT_VERSION;
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(

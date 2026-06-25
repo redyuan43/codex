@@ -117,58 +117,70 @@ impl TestModelsEndpoint {
     fn fetch_count(&self) -> usize {
         self.fetch_count.load(Ordering::SeqCst)
     }
+
+    async fn list_models(&self) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
+        self.fetch_count.fetch_add(1, Ordering::SeqCst);
+        let models = self
+            .responses
+            .lock()
+            .expect("responses lock should not be poisoned")
+            .pop_front()
+            .unwrap_or_default();
+        Ok((models, None))
+    }
 }
 
 #[derive(Debug)]
 struct TestExternalApiKeyAuth;
 
-#[async_trait]
 impl ExternalAuth for TestExternalApiKeyAuth {
     fn auth_mode(&self) -> AuthMode {
         AuthMode::ApiKey
     }
 
-    async fn resolve(&self) -> std::io::Result<Option<ExternalAuthTokens>> {
-        Ok(Some(ExternalAuthTokens::access_token_only(
-            "test-external-api-key",
-        )))
+    fn resolve(&self) -> codex_login::ExternalAuthFuture<'_, Option<ExternalAuthTokens>> {
+        Box::pin(async {
+            Ok(Some(ExternalAuthTokens::access_token_only(
+                "test-external-api-key",
+            )))
+        })
     }
 
-    async fn refresh(
+    fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> std::io::Result<ExternalAuthTokens> {
-        Ok(ExternalAuthTokens::access_token_only(
-            "test-external-api-key",
-        ))
+    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(async {
+            Ok(ExternalAuthTokens::access_token_only(
+                "test-external-api-key",
+            ))
+        })
     }
 }
 
 #[derive(Debug)]
 struct TestUnresolvedExternalApiKeyAuth;
 
-#[async_trait]
 impl ExternalAuth for TestUnresolvedExternalApiKeyAuth {
     fn auth_mode(&self) -> AuthMode {
         AuthMode::ApiKey
     }
 
-    async fn refresh(
+    fn refresh(
         &self,
         _context: ExternalAuthRefreshContext,
-    ) -> std::io::Result<ExternalAuthTokens> {
-        Err(std::io::Error::other("unresolved test auth"))
+    ) -> codex_login::ExternalAuthFuture<'_, ExternalAuthTokens> {
+        Box::pin(async { Err(std::io::Error::other("unresolved test auth")) })
     }
 }
 
-#[async_trait]
 impl ModelsEndpointClient for TestModelsEndpoint {
     fn has_command_auth(&self) -> bool {
         self.has_command_auth
     }
 
-    async fn uses_codex_backend(&self) -> bool {
-        self.uses_codex_backend
+    fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
+        Box::pin(async { self.uses_codex_backend })
     }
 
     fn supports_unauthenticated_model_catalog(&self) -> bool {
@@ -179,18 +191,11 @@ impl ModelsEndpointClient for TestModelsEndpoint {
         self.model_catalog_is_authoritative
     }
 
-    async fn list_models(
-        &self,
-        _client_version: &str,
-    ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
-        self.fetch_count.fetch_add(1, Ordering::SeqCst);
-        let models = self
-            .responses
-            .lock()
-            .expect("responses lock should not be poisoned")
-            .pop_front()
-            .unwrap_or_default();
-        Ok((models, None))
+    fn list_models<'a>(
+        &'a self,
+        _client_version: &'a str,
+    ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
+        Box::pin(TestModelsEndpoint::list_models(self))
     }
 }
 
@@ -236,6 +241,8 @@ c2ln",
         }),
         last_refresh: Some(Utc::now()),
         agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
     };
     std::fs::create_dir_all(codex_home).expect("codex home should be created");
     std::fs::write(
@@ -671,6 +678,14 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
     );
 }
 
+#[test]
+fn client_version_to_whole_uses_server_compat_version() {
+    assert_eq!(
+        crate::client_version_to_whole(),
+        codex_login::default_client::CODEX_SERVER_COMPAT_VERSION
+    );
+}
+
 #[tokio::test]
 async fn refresh_available_models_drops_removed_remote_models() {
     let initial_models = vec![remote_model(
@@ -768,13 +783,6 @@ impl TestAuthAwareModelsEndpoint {
     fn fetch_count(&self) -> usize {
         self.fetch_count.load(Ordering::SeqCst)
     }
-}
-
-#[async_trait]
-impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
-    fn has_command_auth(&self) -> bool {
-        false
-    }
 
     async fn uses_codex_backend(&self) -> bool {
         match self.auth_manager.as_ref() {
@@ -787,10 +795,7 @@ impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
         }
     }
 
-    async fn list_models(
-        &self,
-        _client_version: &str,
-    ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
+    async fn list_models(&self) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         self.fetch_count.fetch_add(1, Ordering::SeqCst);
         let models = self
             .responses
@@ -799,6 +804,23 @@ impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
             .pop_front()
             .unwrap_or_default();
         Ok((models, None))
+    }
+}
+
+impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
+    fn has_command_auth(&self) -> bool {
+        false
+    }
+
+    fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
+        Box::pin(TestAuthAwareModelsEndpoint::uses_codex_backend(self))
+    }
+
+    fn list_models<'a>(
+        &'a self,
+        _client_version: &'a str,
+    ) -> ModelsEndpointFuture<'a, CoreResult<(Vec<ModelInfo>, Option<String>)>> {
+        Box::pin(TestAuthAwareModelsEndpoint::list_models(self))
     }
 }
 

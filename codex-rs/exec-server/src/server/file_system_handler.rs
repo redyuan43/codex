@@ -11,6 +11,8 @@ use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
@@ -106,6 +108,18 @@ impl FileSystemHandler {
         })
     }
 
+    pub(crate) async fn canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        let path = self
+            .file_system
+            .canonicalize(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsCanonicalizeResponse { path })
+    }
+
     pub(crate) async fn read_directory(
         &self,
         params: FsReadDirectoryParams,
@@ -176,6 +190,7 @@ mod tests {
     use codex_protocol::protocol::NetworkAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -204,9 +219,7 @@ mod tests {
                 },
             ),
         ] {
-            let path =
-                AbsolutePathBuf::from_absolute_path(temp_dir.path().join(file_name).as_path())
-                    .expect("absolute path");
+            let path = PathUri::from_path(temp_dir.path().join(file_name)).expect("path URI");
 
             handler
                 .write_file(FsWriteFileParams {
@@ -219,6 +232,24 @@ mod tests {
                 })
                 .await
                 .expect("write file");
+
+            let canonicalized = handler
+                .canonicalize(FsCanonicalizeParams {
+                    path: path.clone(),
+                    sandbox: Some(FileSystemSandboxContext::from_legacy_sandbox_policy(
+                        sandbox_policy.clone(),
+                        sandbox_cwd.clone(),
+                    )),
+                })
+                .await
+                .expect("canonicalize file");
+            assert_eq!(
+                canonicalized.path,
+                PathUri::from_path(
+                    std::fs::canonicalize(temp_dir.path().join(file_name)).expect("canonical path"),
+                )
+                .expect("canonical path URI"),
+            );
 
             let response = handler
                 .read_file(FsReadFileParams {
