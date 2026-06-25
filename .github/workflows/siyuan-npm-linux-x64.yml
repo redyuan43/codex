@@ -9,7 +9,7 @@ on:
       version:
         description: "npm package version"
         required: true
-        default: "0.139.0-siyuan.1"
+        default: "0.139.0-siyuan.2"
       publish_npm:
         description: "Publish the generated tarball to npm"
         required: true
@@ -28,7 +28,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 90
     env:
-      VERSION: ${{ inputs.version || '0.139.0-siyuan.1' }}
+      VERSION: ${{ inputs.version || '0.139.0-siyuan.2' }}
       TARGET: ${{ matrix.target }}
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_PROFILE_RELEASE_DEBUG: "false"
@@ -189,7 +189,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ inputs.version || '0.139.0-siyuan.1' }}
+      VERSION: ${{ inputs.version || '0.139.0-siyuan.2' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

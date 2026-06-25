@@ -5,7 +5,6 @@
 //! dispatch step and records the staged entry once the command has been handled, so
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
-use super::goal_validation::GoalObjectiveValidationSource;
 use super::reasoning_shortcuts::ModelShortcutDirection;
 use super::reasoning_shortcuts::ReasoningShortcutDirection;
 use super::*;

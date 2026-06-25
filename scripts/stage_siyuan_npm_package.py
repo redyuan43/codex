@@ -19,7 +19,7 @@ CPU_BY_TARGET_TRIPLE = {
     "aarch64-unknown-linux-musl": "arm64",
 }
 PACKAGE_NAME = "@ivanfeng3333/siyuan-codex"
-DEFAULT_VERSION = "0.139.0-siyuan.1"
+DEFAULT_VERSION = "0.139.0-siyuan.2"
 
 
 def parse_args() -> argparse.Namespace:
