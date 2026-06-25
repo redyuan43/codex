@@ -11,6 +11,7 @@ use serde::de::value::Error as ValueDeserializerError;
 use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
 use super::requirements_exec_policy::RequirementsExecPolicy;
@@ -149,11 +150,13 @@ pub struct ConfigRequirements {
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
+    pub allow_remote_control: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+    pub marketplaces: Option<Sourced<MarketplaceRequirementsToml>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
     /// Managed network constraints derived from requirements.
@@ -189,11 +192,13 @@ impl Default for ConfigRequirements {
             ),
             allow_managed_hooks_only: None,
             allow_appshots: None,
+            allow_remote_control: None,
             computer_use: None,
             feature_requirements: None,
             managed_hooks: None,
             mcp_servers: None,
             plugins: None,
+            marketplaces: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(/*initial_value*/ None),
@@ -227,6 +232,41 @@ pub struct McpServerRequirement {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginRequirementsToml {
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MarketplaceRequirementsToml {
+    pub restrict_to_allowed_sources: Option<bool>,
+    #[serde(default)]
+    pub allowed_sources: BTreeMap<String, MarketplaceAllowedSourceToml>,
+}
+
+impl MarketplaceRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.restrict_to_allowed_sources.is_none() && self.allowed_sources.is_empty()
+    }
+}
+
+/// Raw marketplace source rule whose active fields are interpreted after
+/// requirements composition.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MarketplaceAllowedSourceToml {
+    pub source: Option<MarketplaceAllowedSourceKind>,
+    pub url: Option<String>,
+    #[serde(rename = "ref")]
+    pub ref_name: Option<String>,
+    pub host_pattern: Option<String>,
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketplaceAllowedSourceKind {
+    Git,
+    HostPattern,
+    Local,
 }
 
 impl PluginRequirementsToml {
@@ -663,10 +703,11 @@ fn is_glob_metacharacter(ch: char) -> bool {
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WebSearchModeRequirement {
     Disabled,
     Cached,
+    Indexed,
     Live,
 }
 
@@ -675,6 +716,7 @@ impl From<WebSearchMode> for WebSearchModeRequirement {
         match mode {
             WebSearchMode::Disabled => WebSearchModeRequirement::Disabled,
             WebSearchMode::Cached => WebSearchModeRequirement::Cached,
+            WebSearchMode::Indexed => WebSearchModeRequirement::Indexed,
             WebSearchMode::Live => WebSearchModeRequirement::Live,
         }
     }
@@ -685,6 +727,7 @@ impl From<WebSearchModeRequirement> for WebSearchMode {
         match mode {
             WebSearchModeRequirement::Disabled => WebSearchMode::Disabled,
             WebSearchModeRequirement::Cached => WebSearchMode::Cached,
+            WebSearchModeRequirement::Indexed => WebSearchMode::Indexed,
             WebSearchModeRequirement::Live => WebSearchMode::Live,
         }
     }
@@ -695,6 +738,7 @@ impl fmt::Display for WebSearchModeRequirement {
         match self {
             WebSearchModeRequirement::Disabled => write!(f, "disabled"),
             WebSearchModeRequirement::Cached => write!(f, "cached"),
+            WebSearchModeRequirement::Indexed => write!(f, "indexed"),
             WebSearchModeRequirement::Live => write!(f, "live"),
         }
     }
@@ -828,6 +872,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_appshots: Option<bool>,
+    pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
     pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
@@ -835,6 +880,7 @@ pub struct ConfigRequirementsToml {
     pub hooks: Option<ManagedHooksRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub plugins: Option<BTreeMap<String, PluginRequirementsToml>>,
+    pub marketplaces: Option<MarketplaceRequirementsToml>,
     pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -882,12 +928,14 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
+    pub allow_remote_control: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub plugins: Option<Sourced<BTreeMap<String, PluginRequirementsToml>>>,
+    pub marketplaces: Option<Sourced<MarketplaceRequirementsToml>>,
     pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
@@ -924,12 +972,14 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes: _,
             allow_managed_hooks_only: _,
             allow_appshots: _,
+            allow_remote_control: _,
             computer_use: _,
             windows: _,
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
             plugins: _,
+            marketplaces: _,
             apps: _,
             rules: _,
             enforce_residency: _,
@@ -959,12 +1009,14 @@ impl ConfigRequirementsWithSources {
                 allowed_web_search_modes,
                 allow_managed_hooks_only,
                 allow_appshots,
+                allow_remote_control,
                 computer_use,
                 windows,
                 feature_requirements,
                 hooks,
                 mcp_servers,
                 plugins,
+                marketplaces,
                 rules,
                 enforce_residency,
                 network,
@@ -992,12 +1044,14 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_remote_control,
             computer_use,
             windows,
             feature_requirements,
             hooks,
             mcp_servers,
             plugins,
+            marketplaces,
             apps,
             rules,
             enforce_residency,
@@ -1015,12 +1069,14 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
             allow_appshots: allow_appshots.map(|sourced| sourced.value),
+            allow_remote_control: allow_remote_control.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
             windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             plugins: plugins.map(|sourced| sourced.value),
+            marketplaces: marketplaces.map(|sourced| sourced.value),
             apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
@@ -1104,6 +1160,7 @@ impl ConfigRequirementsToml {
             && self.allowed_web_search_modes.is_none()
             && self.allow_managed_hooks_only.is_none()
             && self.allow_appshots.is_none()
+            && self.allow_remote_control.is_none()
             && self
                 .computer_use
                 .as_ref()
@@ -1125,6 +1182,10 @@ impl ConfigRequirementsToml {
                 .plugins
                 .as_ref()
                 .is_none_or(|plugins| plugins.values().all(PluginRequirementsToml::is_empty))
+            && self
+                .marketplaces
+                .as_ref()
+                .is_none_or(MarketplaceRequirementsToml::is_empty)
             && self
                 .apps
                 .as_ref()
@@ -1156,12 +1217,14 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_remote_control,
             computer_use,
             windows,
             feature_requirements,
             hooks,
             mcp_servers,
             plugins,
+            marketplaces,
             apps: _apps,
             rules,
             enforce_residency,
@@ -1335,6 +1398,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
 
                 let initial_value = if accepted.contains(&WebSearchModeRequirement::Cached) {
                     WebSearchMode::Cached
+                } else if accepted.contains(&WebSearchModeRequirement::Indexed) {
+                    WebSearchMode::Indexed
                 } else if accepted.contains(&WebSearchModeRequirement::Live) {
                     WebSearchMode::Live
                 } else {
@@ -1434,11 +1499,13 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             web_search_mode,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_remote_control,
             computer_use,
             feature_requirements,
             managed_hooks,
             mcp_servers,
             plugins,
+            marketplaces,
             exec_policy,
             enforce_residency,
             network,
@@ -1525,12 +1592,14 @@ mod tests {
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
+            allow_remote_control,
             computer_use,
             windows,
             feature_requirements,
             hooks,
             mcp_servers,
             plugins,
+            marketplaces,
             apps,
             rules,
             enforce_residency,
@@ -1555,6 +1624,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_appshots: allow_appshots
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allow_remote_control: allow_remote_control
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
@@ -1562,6 +1633,7 @@ mod tests {
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             plugins: plugins.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            marketplaces: marketplaces.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
@@ -1689,6 +1761,19 @@ mod tests {
     }
 
     #[test]
+    fn allow_remote_control_false_is_still_configured() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+                allow_remote_control = false
+            "#,
+        )?;
+
+        assert_eq!(requirements.allow_remote_control, Some(false));
+        assert!(!requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn deserialize_computer_use_requirements() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
@@ -1745,12 +1830,14 @@ mod tests {
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
+            allow_remote_control: Some(false),
             computer_use: Some(computer_use.clone()),
             windows: None,
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
             plugins: None,
+            marketplaces: None,
             apps: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
@@ -1787,6 +1874,10 @@ mod tests {
                     enforce_source.clone(),
                 )),
                 allow_appshots: Some(Sourced::new(/*value*/ false, enforce_source.clone(),)),
+                allow_remote_control: Some(Sourced::new(
+                    /*value*/ false,
+                    enforce_source.clone(),
+                )),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
                 windows: None,
                 feature_requirements: Some(Sourced::new(
@@ -1796,6 +1887,7 @@ mod tests {
                 hooks: None,
                 mcp_servers: None,
                 plugins: None,
+                marketplaces: None,
                 apps: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
@@ -1835,12 +1927,14 @@ mod tests {
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
+                allow_remote_control: None,
                 computer_use: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
                 plugins: None,
+                marketplaces: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -1888,12 +1982,14 @@ mod tests {
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
+                allow_remote_control: None,
                 computer_use: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
                 plugins: None,
+                marketplaces: None,
                 apps: None,
                 rules: None,
                 enforce_residency: None,
@@ -2473,17 +2569,6 @@ allowed_approvals_reviewers = ["user"]
                 .can_set(&AskForApproval::UnlessTrusted)
                 .is_ok()
         );
-        assert_eq!(
-            requirements
-                .approval_policy
-                .can_set(&AskForApproval::OnFailure),
-            Err(ConstraintError::InvalidValue {
-                field_name: "approval_policy",
-                candidate: "OnFailure".into(),
-                allowed: "[UnlessTrusted, OnRequest]".into(),
-                requirement_source: RequirementSource::Unknown,
-            })
-        );
         assert!(
             requirements
                 .approval_policy
@@ -2889,6 +2974,34 @@ allowed_approvals_reviewers = ["user"]
                 .can_set(&WebSearchMode::Cached)
                 .is_ok()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_web_search_modes_supports_indexed() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+                allowed_web_search_modes = ["indexed"]
+            "#,
+        )?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(requirements.web_search_mode.value(), WebSearchMode::Indexed);
+        for mode in [WebSearchMode::Disabled, WebSearchMode::Indexed] {
+            assert!(requirements.web_search_mode.can_set(&mode).is_ok());
+        }
+        for mode in [WebSearchMode::Cached, WebSearchMode::Live] {
+            assert_eq!(
+                requirements.web_search_mode.can_set(&mode),
+                Err(ConstraintError::InvalidValue {
+                    field_name: "web_search_mode",
+                    candidate: format!("{mode:?}"),
+                    allowed: "[Disabled, Indexed]".into(),
+                    requirement_source: RequirementSource::Unknown,
+                })
+            );
+        }
 
         Ok(())
     }

@@ -16,15 +16,17 @@
 //! 3.  We do **not** walk past the project root.
 
 use crate::config::Config;
-use codex_app_server_protocol::ConfigLayerSource;
+use crate::context::UserInstructions as ContextUserInstructions;
+use crate::environment_selection::TurnEnvironmentSnapshot;
+use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
 use codex_extension_api::UserInstructions;
-use codex_features::Feature;
-use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
+use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::io;
@@ -43,26 +45,30 @@ const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Loads project AGENTS.md content and combines it with host-provided user
 /// instructions.
 pub(crate) async fn load_project_instructions(
-    config: &mut Config,
+    config: &Config,
     user_instructions: Option<UserInstructions>,
-    fs: Option<&dyn ExecutorFileSystem>,
+    environments: &TurnEnvironmentSnapshot,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
-    if let Some(fs) = fs {
-        match read_agents_md(config, fs).await {
+    for turn_environment in &environments.turn_environments {
+        let filesystem = turn_environment.environment.get_filesystem();
+        match read_agents_md(
+            config,
+            filesystem.as_ref(),
+            &turn_environment.environment_id,
+            turn_environment.cwd(),
+        )
+        .await
+        {
             Ok(Some(docs)) => loaded.entries.extend(docs.entries),
             Ok(None) => {}
             Err(e) => {
-                error!("error trying to find AGENTS.md docs: {e:#}");
+                error!(
+                    environment_id = turn_environment.environment_id,
+                    "error trying to find AGENTS.md docs: {e:#}"
+                );
             }
         }
-    }
-
-    if config.features.enabled(Feature::ChildAgentsMd) {
-        loaded.entries.push(InstructionEntry {
-            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-            provenance: InstructionProvenance::Internal,
-        });
     }
 
     (!loaded.is_empty()).then_some(loaded)
@@ -75,8 +81,10 @@ pub(crate) async fn load_project_instructions(
 /// `Ok(None)`. Unexpected I/O failures bubble up as `Err` so callers can
 /// decide how to handle them.
 async fn read_agents_md(
-    config: &mut Config,
+    config: &Config,
     fs: &dyn ExecutorFileSystem,
+    environment_id: &str,
+    cwd: &PathUri,
 ) -> io::Result<Option<LoadedAgentsMd>> {
     let max_total = config.project_doc_max_bytes;
 
@@ -84,7 +92,7 @@ async fn read_agents_md(
         return Ok(None);
     }
 
-    let paths = agents_md_paths(config, fs).await?;
+    let paths = agents_md_paths(config, cwd, fs).await?;
     if paths.is_empty() {
         return Ok(None);
     }
@@ -97,21 +105,11 @@ async fn read_agents_md(
             break;
         }
 
-        let path_uri = PathUri::from_abs_path(&p)?;
-        match fs.get_metadata(&path_uri, /*sandbox*/ None).await {
-            Ok(metadata) if !metadata.is_file => continue,
-            Ok(_) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        }
-
-        let mut data = match fs.read_file(&path_uri, /*sandbox*/ None).await {
+        let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
         };
-        warn_invalid_utf8(&p, &data, "Project", &mut config.startup_warnings);
-
         let size = data.len() as u64;
         if size > remaining {
             data.truncate(remaining as usize);
@@ -119,9 +117,9 @@ async fn read_agents_md(
 
         if size > remaining {
             tracing::warn!(
-                "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
-                p.display(),
-                remaining,
+                path = %p,
+                remaining_bytes = remaining,
+                "project doc exceeds remaining budget; truncating"
             );
         }
 
@@ -129,7 +127,11 @@ async fn read_agents_md(
         if !text.trim().is_empty() {
             loaded.entries.push(InstructionEntry {
                 contents: text,
-                provenance: InstructionProvenance::Project(p),
+                provenance: InstructionProvenance::Project {
+                    source_path: p,
+                    environment_id: environment_id.to_string(),
+                    cwd: cwd.clone(),
+                },
             });
             remaining = remaining.saturating_sub(data.len() as u64);
         }
@@ -146,9 +148,10 @@ async fn read_agents_md(
 /// directory, inclusive. Symlinks are allowed.
 async fn agents_md_paths(
     config: &Config,
+    cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
-) -> io::Result<Vec<AbsolutePathBuf>> {
-    let dir = config.cwd.clone();
+) -> io::Result<Vec<PathUri>> {
+    let dir = cwd.clone();
 
     let mut merged = TomlValue::Table(toml::map::Map::new());
     for layer in config.config_layer_stack.get_layers(
@@ -168,30 +171,15 @@ async fn agents_md_paths(
             default_project_root_markers()
         }
     };
-    let mut project_root = None;
-    if !project_root_markers.is_empty() {
-        for ancestor in dir.ancestors() {
-            for marker in &project_root_markers {
-                let marker_path = ancestor.join(marker);
-                let marker_path_uri = PathUri::from_abs_path(&marker_path)?;
-                let marker_exists = match fs.get_metadata(&marker_path_uri, /*sandbox*/ None).await
-                {
-                    Ok(_) => true,
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(err),
-                };
-                if marker_exists {
-                    project_root = Some(ancestor.clone());
-                    break;
-                }
-            }
-            if project_root.is_some() {
-                break;
-            }
-        }
-    }
-
-    let search_dirs: Vec<AbsolutePathBuf> = if let Some(root) = project_root {
+    let project_root = find_nearest_ancestor_with_markers(
+        fs,
+        &dir,
+        project_root_markers,
+        FindUpErrorPolicy::Propagate,
+        /*sandbox*/ None,
+    )
+    .await?;
+    let search_dirs = if let Some(root) = project_root {
         let mut dirs = Vec::new();
         let mut cursor = dir.clone();
         loop {
@@ -210,24 +198,24 @@ async fn agents_md_paths(
         vec![dir]
     };
 
-    let mut found: Vec<AbsolutePathBuf> = Vec::new();
+    let mut found = Vec::new();
     let candidate_filenames = candidate_filenames(config);
-    for d in search_dirs {
+    for directory in search_dirs {
         for name in &candidate_filenames {
-            let candidate = d.join(name);
-            let candidate_uri = PathUri::from_abs_path(&candidate)?;
-            match fs.get_metadata(&candidate_uri, /*sandbox*/ None).await {
-                Ok(md) if md.is_file => {
+            let candidate = directory
+                .join(name)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+                Ok(metadata) if metadata.is_file => {
                     found.push(candidate);
                     break;
                 }
                 Ok(_) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err),
             }
         }
     }
-
     Ok(found)
 }
 
@@ -309,6 +297,14 @@ impl LoadedAgentsMd {
 
     /// Returns the concatenated model-visible instruction text.
     pub fn text(&self) -> String {
+        if self.has_multiple_project_environments() {
+            self.environment_labeled_text()
+        } else {
+            self.legacy_text()
+        }
+    }
+
+    fn legacy_text(&self) -> String {
         let mut output = String::new();
         let mut has_previous = false;
         let mut previous_was_project = false;
@@ -317,7 +313,7 @@ impl LoadedAgentsMd {
             has_previous = true;
         }
         for entry in &self.entries {
-            let is_project = matches!(&entry.provenance, InstructionProvenance::Project(_));
+            let is_project = matches!(&entry.provenance, InstructionProvenance::Project { .. });
             if has_previous {
                 // The project-doc marker tells the model where workspace-scoped
                 // instructions begin, so it is only needed on the transition
@@ -336,21 +332,101 @@ impl LoadedAgentsMd {
         output
     }
 
-    /// Returns the host-provided user instructions.
-    pub(crate) fn user_instructions(&self) -> Option<&UserInstructions> {
-        self.user_instructions.as_ref()
+    fn environment_labeled_text(&self) -> String {
+        let mut output = String::new();
+        let mut has_previous = false;
+        let mut previous_environment: Option<(&str, &PathUri)> = None;
+        if let Some(instructions) = &self.user_instructions {
+            output.push_str(&instructions.text);
+            has_previous = true;
+        }
+        for entry in &self.entries {
+            match &entry.provenance {
+                InstructionProvenance::Project {
+                    environment_id,
+                    cwd,
+                    ..
+                } => {
+                    if has_previous {
+                        output.push_str("\n\n");
+                    }
+                    // One environment can contribute several hierarchical AGENTS.md files from
+                    // its project root through its cwd. Label that environment once for the
+                    // complete group rather than repeating the label before every file.
+                    let environment = (environment_id.as_str(), cwd);
+                    if previous_environment != Some(environment) {
+                        output.push_str(&format!(
+                            "for `{}` with root {}\n\n",
+                            environment_id,
+                            cwd.inferred_native_path_string()
+                        ));
+                    }
+                    output.push_str(&entry.contents);
+                    previous_environment = Some(environment);
+                }
+                InstructionProvenance::Internal => {
+                    if has_previous {
+                        output.push_str("\n\n");
+                    }
+                    output.push_str(&entry.contents);
+                    previous_environment = None;
+                }
+            }
+            has_previous = true;
+        }
+        output
+    }
+
+    pub(crate) fn contextual_user_fragment(&self) -> ContextUserInstructions {
+        // One contributing project environment retains the legacy cwd wrapper. With two or more,
+        // the body labels every contributing environment itself, so the outer cwd is omitted.
+        let directory = if self.has_multiple_project_environments() {
+            None
+        } else {
+            self.single_project_cwd()
+                .map(PathUri::inferred_native_path_string)
+        };
+        ContextUserInstructions {
+            directory,
+            text: self.text(),
+        }
     }
 
     /// Returns the AGENTS.md files that supplied instruction entries.
-    pub fn sources(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
+    pub fn sources(&self) -> impl Iterator<Item = PathUri> + '_ {
         self.user_instructions
             .iter()
-            .map(|instructions| &instructions.source)
+            .map(|instructions| PathUri::from_abs_path(&instructions.source))
             .chain(
                 self.entries
                     .iter()
                     .filter_map(|entry| entry.provenance.path()),
             )
+    }
+
+    fn has_multiple_project_environments(&self) -> bool {
+        let mut first_environment_id = None;
+        self.entries.iter().any(|entry| {
+            let InstructionProvenance::Project { environment_id, .. } = &entry.provenance else {
+                return false;
+            };
+            match first_environment_id {
+                Some(first_environment_id) => first_environment_id != environment_id,
+                None => {
+                    first_environment_id = Some(environment_id);
+                    false
+                }
+            }
+        })
+    }
+
+    fn single_project_cwd(&self) -> Option<&PathUri> {
+        self.entries
+            .iter()
+            .find_map(|entry| match &entry.provenance {
+                InstructionProvenance::Project { cwd, .. } => Some(cwd),
+                InstructionProvenance::Internal => None,
+            })
     }
 }
 
@@ -367,32 +443,23 @@ struct InstructionEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InstructionProvenance {
     /// Workspace instructions discovered from project AGENTS.md files.
-    Project(AbsolutePathBuf),
+    Project {
+        /// Exact AGENTS.md file, distinct from the environment's selected cwd.
+        source_path: PathUri,
+        environment_id: String,
+        cwd: PathUri,
+    },
 
     /// Instructions without a file source, including internally defined guidance.
     Internal,
 }
 
 impl InstructionProvenance {
-    fn path(&self) -> Option<&AbsolutePathBuf> {
+    fn path(&self) -> Option<PathUri> {
         match self {
-            Self::Project(path) => Some(path),
+            Self::Project { source_path, .. } => Some(source_path.clone()),
             Self::Internal => None,
         }
-    }
-}
-
-fn warn_invalid_utf8(
-    path: &AbsolutePathBuf,
-    data: &[u8],
-    source: &str,
-    startup_warnings: &mut Vec<String>,
-) {
-    if let Err(err) = std::str::from_utf8(data) {
-        startup_warnings.push(format!(
-            "{source} AGENTS.md instructions from `{}` contain invalid UTF-8: {err}. Invalid byte sequences were replaced.",
-            path.display()
-        ));
     }
 }
 

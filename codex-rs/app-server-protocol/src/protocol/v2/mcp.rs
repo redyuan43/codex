@@ -186,6 +186,8 @@ pub struct McpServerRefreshResponse {}
 #[ts(export_to = "v2/")]
 pub struct McpServerOauthLoginParams {
     pub name: String,
+    #[ts(optional = nullable)]
+    pub thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub scopes: Option<Vec<String>>,
@@ -215,6 +217,7 @@ pub struct McpToolCallProgressNotification {
 #[ts(export_to = "v2/")]
 pub struct McpServerOauthLoginCompletedNotification {
     pub name: String,
+    pub thread_id: Option<String>,
     pub success: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -632,6 +635,15 @@ pub enum McpServerElicitationRequest {
         message: String,
         requested_schema: McpElicitationSchema,
     },
+    #[serde(rename = "openai/form", rename_all = "camelCase")]
+    #[ts(rename = "openai/form", rename_all = "camelCase")]
+    OpenAiForm {
+        #[serde(rename = "_meta")]
+        #[ts(rename = "_meta")]
+        meta: Option<JsonValue>,
+        message: String,
+        requested_schema: JsonValue,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Url {
@@ -657,6 +669,15 @@ impl TryFrom<CoreElicitationRequest> for McpServerElicitationRequest {
                 meta,
                 message,
                 requested_schema: serde_json::from_value(requested_schema)?,
+            }),
+            CoreElicitationRequest::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
+            } => Ok(Self::OpenAiForm {
+                meta,
+                message,
+                requested_schema,
             }),
             CoreElicitationRequest::Url {
                 meta,

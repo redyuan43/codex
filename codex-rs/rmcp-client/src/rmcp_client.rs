@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -12,7 +11,7 @@ use std::time::Instant;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
-use codex_client::maybe_build_rustls_client_config_with_custom_ca;
+use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
 use futures::FutureExt;
@@ -39,6 +38,7 @@ use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
+use rmcp::model::RequestParamsMeta;
 use rmcp::model::ServerResult;
 use rmcp::model::Tool;
 use rmcp::service::RoleClient;
@@ -57,6 +57,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio::time;
+use tracing::instrument;
 use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
@@ -66,11 +67,11 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
 use crate::stdio_server_launcher::StdioServerTransport;
-use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
@@ -124,6 +125,7 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     },
@@ -249,7 +251,24 @@ fn remaining_operation_timeout(
     }
 }
 
-pub type Elicitation = CreateElicitationRequestParams;
+#[derive(Debug, Clone, PartialEq)]
+pub enum Elicitation {
+    Mcp(CreateElicitationRequestParams),
+    OpenAiForm {
+        meta: Option<serde_json::Value>,
+        message: String,
+        requested_schema: serde_json::Value,
+    },
+}
+
+impl Elicitation {
+    pub fn meta(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        match self {
+            Self::Mcp(request) => request.meta().map(|meta| &meta.0),
+            Self::OpenAiForm { meta, .. } => meta.as_ref().and_then(serde_json::Value::as_object),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -334,7 +353,7 @@ impl RmcpClient {
         args: Vec<OsString>,
         env: Option<HashMap<OsString, OsString>>,
         env_vars: &[McpServerEnvVar],
-        cwd: Option<PathBuf>,
+        cwd: Option<String>,
         launcher: Arc<dyn StdioServerLauncher>,
     ) -> io::Result<Self> {
         let transport_recipe = TransportRecipe::Stdio {
@@ -371,6 +390,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
         auth_provider: Option<SharedAuthProvider>,
     ) -> Result<Self> {
@@ -381,6 +401,7 @@ impl RmcpClient {
             http_headers,
             env_http_headers,
             store_mode,
+            keyring_backend_kind,
             http_client,
             auth_provider,
         };
@@ -399,6 +420,7 @@ impl RmcpClient {
 
     /// Perform the initialization handshake with the MCP server.
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization
+    #[instrument(level = "trace", skip_all)]
     pub async fn initialize(
         &self,
         params: InitializeRequestParams,
@@ -434,7 +456,7 @@ impl RmcpClient {
             .peer()
             .peer_info()
             .ok_or_else(|| anyhow!("handshake succeeded but server info was missing"))?;
-        let initialize_result = initialize_result_rmcp.clone();
+        let initialize_result = initialize_result_rmcp.as_ref().clone();
 
         {
             let mut initialize_context = self.initialize_context.lock().await;
@@ -480,6 +502,7 @@ impl RmcpClient {
         Ok(result)
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn list_tools_with_connector_ids(
         &self,
         params: Option<PaginatedRequestParams>,
@@ -757,17 +780,24 @@ impl RmcpClient {
                 http_headers,
                 env_http_headers,
                 store_mode,
+                keyring_backend_kind,
                 http_client,
                 auth_provider,
             } => {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
+                let auth_provider =
+                    if bearer_token.is_some() || default_headers.contains_key(AUTHORIZATION) {
+                        None
+                    } else {
+                        auth_provider.clone()
+                    };
 
                 let initial_oauth_tokens = if bearer_token.is_none()
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    match load_oauth_tokens(server_name, url, *store_mode) {
+                    match load_oauth_tokens(server_name, url, *store_mode, *keyring_backend_kind) {
                         Ok(tokens) => tokens,
                         Err(err) => {
                             warn!("failed to read tokens for server `{server_name}`: {err}");
@@ -784,6 +814,7 @@ impl RmcpClient {
                         url,
                         initial_tokens.clone(),
                         *store_mode,
+                        *keyring_backend_kind,
                         default_headers.clone(),
                         Arc::clone(http_client),
                     )
@@ -835,7 +866,7 @@ impl RmcpClient {
                         StreamableHttpClientAdapter::new(
                             Arc::clone(http_client),
                             default_headers,
-                            auth_provider.clone(),
+                            auth_provider,
                         ),
                         http_config,
                     );
@@ -1127,22 +1158,19 @@ async fn create_oauth_transport_and_runtime(
     url: &str,
     initial_tokens: StoredOAuthTokens,
     credentials_store: OAuthCredentialsStoreMode,
+    keyring_backend_kind: AuthKeyringBackendKind,
     default_headers: HeaderMap,
     http_client: Arc<dyn HttpClient>,
 ) -> Result<(
     StreamableHttpClientTransport<AuthClient<StreamableHttpClientAdapter>>,
     OAuthPersistor,
 )> {
-    let mut builder = apply_default_headers(reqwest::Client::builder(), &default_headers);
-    if let Some(tls_config) = maybe_build_rustls_client_config_with_custom_ca()? {
-        builder = builder.tls_backend_preconfigured(tls_config.as_ref().clone());
-    }
-    let oauth_metadata_client = builder.build()?;
-    // TODO(aibrahim): teach OAuth bootstrap and refresh to use the same
-    // shared HTTP client abstraction instead of always creating the local
-    // reqwest metadata client here.
+    let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new(
+        http_client.clone(),
+        default_headers.clone(),
+    ));
     let mut oauth_state =
-        OAuthState::new(url.to_string(), Some(oauth_metadata_client.clone())).await?;
+        OAuthState::new_with_oauth_http_client(url.to_string(), oauth_http_client).await?;
 
     oauth_state
         .set_credentials(
@@ -1175,6 +1203,7 @@ async fn create_oauth_transport_and_runtime(
         url.to_string(),
         auth_manager,
         credentials_store,
+        keyring_backend_kind,
         Some(initial_tokens),
     );
 

@@ -7,6 +7,7 @@ use super::app_server_event_targets::server_request_thread_id;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
+use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
@@ -80,6 +81,15 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                let has_codex_backend_auth = matches!(
+                    notification.auth_mode,
+                    Some(
+                        AuthMode::Chatgpt
+                            | AuthMode::ChatgptAuthTokens
+                            | AuthMode::AgentIdentity
+                            | AuthMode::PersonalAccessToken
+                    )
+                );
                 self.chat_widget.update_account_state(
                     status_account_display_from_auth_mode(
                         notification.auth_mode,
@@ -89,10 +99,11 @@ impl App {
                     notification
                         .auth_mode
                         .is_some_and(AuthMode::has_chatgpt_account),
+                    has_codex_backend_auth,
                 );
                 return;
             }
-            ServerNotification::ExternalAgentConfigImportCompleted(_) => {
+            ServerNotification::ExternalAgentConfigImportCompleted(notification) => {
                 let should_report_completion =
                     app_server_client.consume_external_agent_config_import_completion();
                 if let Err(err) = self.refresh_in_memory_config_from_disk().await {
@@ -106,10 +117,8 @@ impl App {
                 self.chat_widget.submit_op(AppCommand::reload_user_config());
                 self.fetch_plugins_list(app_server_client, cwd);
                 if should_report_completion {
-                    self.chat_widget.add_info_message(
-                        crate::external_agent_config_migration_flow::EXTERNAL_AGENT_CONFIG_MIGRATION_FINISHED_MESSAGE
-                            .to_string(),
-                        /*hint*/ None,
+                    self.chat_widget.add_plain_history_lines(
+                        crate::external_agent_config_migration_flow::external_agent_config_migration_finished_lines(notification),
                     );
                 }
                 return;
@@ -117,7 +126,12 @@ impl App {
             ServerNotification::AppListUpdated(notification) => {
                 self.chat_widget.on_connectors_loaded(
                     Ok(ConnectorsSnapshot {
-                        connectors: notification.data.clone(),
+                        connectors: notification
+                            .data
+                            .iter()
+                            .cloned()
+                            .map(app_info_from_api)
+                            .collect(),
                     }),
                     /*is_final*/ false,
                 );

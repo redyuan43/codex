@@ -1,5 +1,8 @@
 use std::collections::HashSet;
+use std::io;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
@@ -7,6 +10,9 @@ use codex_api::ImageQuality;
 use codex_api::ImageUrl;
 use codex_core::context::extension_image_generation_output_hint;
 use codex_core::image_generation_artifact_path;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LOCAL_FS;
 use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
@@ -51,7 +57,7 @@ const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
-    codex_home: AbsolutePathBuf,
+    save_root: Option<AbsolutePathBuf>,
     thread_id: String,
 }
 
@@ -59,12 +65,12 @@ impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
     pub(crate) fn new(
         backend: CodexImagesBackend,
-        codex_home: AbsolutePathBuf,
+        save_root: Option<AbsolutePathBuf>,
         thread_id: String,
     ) -> Self {
         Self {
             backend,
-            codex_home,
+            save_root,
             thread_id,
         }
     }
@@ -117,17 +123,58 @@ impl ImageGenerationTool {
                 saved_path: None,
             }))
             .await;
-        let response = match request {
+        let result = match request {
             ImageRequest::Generate(request) => self.backend.generate(request).await,
             ImageRequest::Edit(request) => self.backend.edit(request).await,
         }
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("image generation failed: {err}"))
-        })?;
-        let Some(result) = response.data.into_iter().next().map(|data| data.b64_json) else {
-            return Err(FunctionCallError::RespondToModel(
-                "image generation returned no image data".to_string(),
-            ));
+        .map_err(|err| format!("image generation failed: {err}"))
+        .and_then(|response| {
+            response
+                .data
+                .into_iter()
+                .next()
+                .map(|data| data.b64_json)
+                .ok_or_else(|| "image generation returned no image data".to_string())
+        });
+        let result = match result {
+            Ok(result) => result,
+            Err(message) => {
+                call.turn_item_emitter
+                    .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                        id: call.call_id.clone(),
+                        status: "failed".to_string(),
+                        revised_prompt: Some(args.prompt.clone()),
+                        result: String::new(),
+                        saved_path: None,
+                    }))
+                    .await;
+                return Err(FunctionCallError::RespondToModel(message));
+            }
+        };
+        let saved_path = match self.save_root.as_ref() {
+            Some(save_root) => match save_image_generation_result(
+                LOCAL_FS.as_ref(),
+                save_root,
+                &self.thread_id,
+                &call.call_id,
+                &result,
+            )
+            .await
+            {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    let output_path =
+                        image_generation_artifact_path(save_root, &self.thread_id, &call.call_id);
+                    let output_dir = output_path.parent().unwrap_or_else(|| save_root.clone());
+                    tracing::warn!(
+                        call_id = %call.call_id,
+                        output_dir = %output_dir.display(),
+                        "failed to save generated image: {error}"
+                    );
+                    None
+                }
+            },
+            None => None,
         };
         call.turn_item_emitter
             .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
@@ -135,21 +182,42 @@ impl ImageGenerationTool {
                 status: "completed".to_string(),
                 revised_prompt: Some(args.prompt),
                 result: result.clone(),
-                saved_path: None,
+                saved_path: saved_path.clone(),
             }))
             .await;
-        let output_path =
-            image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
-        let output_dir = output_path
-            .parent()
-            .unwrap_or_else(|| self.codex_home.clone());
-        let output_hint =
-            extension_image_generation_output_hint(output_dir.display(), output_path.display());
+        let output_hint = saved_path.as_ref().and_then(|output_path| {
+            let output_dir = output_path.parent()?;
+            extension_image_generation_output_hint(output_dir.display(), output_path.display())
+        });
         Ok(Box::new(GeneratedImageOutput {
             result,
             output_hint,
         }))
     }
+}
+
+async fn save_image_generation_result(
+    fs: &dyn ExecutorFileSystem,
+    save_root: &AbsolutePathBuf,
+    session_id: &str,
+    call_id: &str,
+    result: &str,
+) -> io::Result<AbsolutePathBuf> {
+    let bytes = BASE64_STANDARD
+        .decode(result.trim().as_bytes())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let path = image_generation_artifact_path(save_root, session_id, call_id);
+    if let Some(parent) = path.parent() {
+        fs.create_directory(
+            &PathUri::from_abs_path(&parent),
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    }
+    fs.write_file(&PathUri::from_abs_path(&path), bytes, /*sandbox*/ None)
+        .await?;
+    Ok(path)
 }
 
 #[derive(Debug, PartialEq)]
@@ -240,7 +308,8 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             ResponseItem::CustomToolCall { call_id, .. } => {
                 custom_tool_call_ids.insert(call_id.as_str());
             }
-            ResponseItem::Message { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Message { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -251,7 +320,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
@@ -267,9 +336,9 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                     ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
                 }));
             }
-            ResponseItem::FunctionCallOutput { call_id, output }
-                if function_call_ids.contains(call_id.as_str()) =>
-            {
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
+            } if function_call_ids.contains(call_id.as_str()) => {
                 image_urls.extend(output_image_urls(output));
             }
             ResponseItem::CustomToolCallOutput {
@@ -280,7 +349,8 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
                 image_urls.push(format!("data:image/png;base64,{result}"));
             }
-            ResponseItem::Reasoning { .. }
+            ResponseItem::AdditionalTools { .. }
+            | ResponseItem::Reasoning { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
@@ -292,7 +362,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
             | ResponseItem::WebSearchCall { .. }
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::CompactionTrigger
+            | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => {}
         }
@@ -325,15 +395,11 @@ async fn image_url(
     path: &AbsolutePathBuf,
     environment: &ToolEnvironment,
 ) -> Result<ImageUrl, FunctionCallError> {
-    let path_uri = PathUri::from_abs_path(path).map_err(|error| {
-        FunctionCallError::RespondToModel(format!(
-            "unable to read referenced image at `{}`: {error}",
-            path.display()
-        ))
-    })?;
+    let path_uri = PathUri::from_abs_path(path);
+    let sandbox = environment.file_system_sandbox_context.clone();
     let bytes = environment
         .file_system
-        .read_file(&path_uri, Some(&environment.file_system_sandbox_context))
+        .read_file(&path_uri, Some(&sandbox))
         .await
         .map_err(|error| {
             FunctionCallError::RespondToModel(format!(
