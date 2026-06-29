@@ -55,6 +55,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::de::Error as SerdeError;
 
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 4] = [
     OPENAI_PROVIDER_ID,
@@ -267,6 +268,7 @@ pub struct ConfigToml {
     pub personality: Option<Personality>,
 
     /// Optional explicit service tier preference for new turns (`fast` or `flex`).
+    #[serde(default, deserialize_with = "deserialize_service_tier_option")]
     pub service_tier: Option<ServiceTier>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
@@ -724,6 +726,27 @@ impl ConfigToml {
     }
 }
 
+pub(crate) fn deserialize_service_tier_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<ServiceTier>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(value) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+
+    match value.as_str() {
+        "default" => Ok(None),
+        "fast" => Ok(Some(ServiceTier::Fast)),
+        "flex" => Ok(Some(ServiceTier::Flex)),
+        other => Err(D::Error::unknown_variant(
+            other,
+            &["default", "fast", "flex"],
+        )),
+    }
+}
+
 /// Canonicalize the path and convert it to a string to be used as a key in the
 /// projects trust map. On Windows, strips UNC, when possible, to try to ensure
 /// that different paths that point to the same location have the same key.
@@ -790,5 +813,37 @@ pub fn validate_oss_provider(provider: &str) -> std::io::Result<()> {
                 "Invalid OSS provider '{provider}'. Must be one of: {LLAMACPP_OSS_PROVIDER_ID}, {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}"
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_tier_default_deserializes_as_unset() {
+        let cfg: ConfigToml =
+            toml::from_str("service_tier = \"default\"").expect("deserialize legacy service tier");
+
+        assert_eq!(cfg.service_tier, None);
+    }
+
+    #[test]
+    fn profile_service_tier_default_deserializes_as_unset() {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+                [profiles.local]
+                service_tier = "default"
+            "#,
+        )
+        .expect("deserialize legacy profile service tier");
+
+        assert_eq!(
+            cfg.profiles
+                .get("local")
+                .expect("local profile should exist")
+                .service_tier,
+            None
+        );
     }
 }
