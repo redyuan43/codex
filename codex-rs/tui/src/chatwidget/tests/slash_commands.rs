@@ -106,30 +106,29 @@ async fn slash_loop_opens_thread_alarms_for_active_thread() {
 }
 
 #[tokio::test]
-async fn slash_loop_with_args_requests_alarm_spec_parse() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::AlarmScheduler, true);
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
+async fn slash_loop_with_args_schedules_prompt_loop() {
+    crate::loop_scheduler::stop_all_loops();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_composer_text(
-        "/loop every 5 minutes review the repo".to_string(),
+        "/loop every 5m review the repo".to_string(),
         Vec::new(),
         Vec::new(),
     );
 
     chat.dispatch_command_with_args(
         SlashCommand::Loop,
-        "every 5 minutes review the repo".to_string(),
+        "every 5m review the repo".to_string(),
         Vec::new(),
     );
 
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CreateThreadAlarmFromSpec {
-            thread_id: event_thread_id,
-            spec
-        }) if event_thread_id == thread_id && spec == "every 5 minutes review the repo"
+    let descriptions = crate::loop_scheduler::active_loop_descriptions();
+    assert_eq!(descriptions.len(), 1);
+    assert!(
+        descriptions[0].contains("every 5m: review the repo"),
+        "unexpected description: {}",
+        descriptions[0]
     );
+    crate::loop_scheduler::stop_all_loops();
 }
 #[tokio::test]
 async fn slash_copy_state_tracks_turn_complete_final_reply() {

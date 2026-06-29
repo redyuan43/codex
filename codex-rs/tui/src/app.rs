@@ -5591,6 +5591,10 @@ impl App {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
             }
+            AppEvent::SubmitUserMessage { text } => {
+                self.chat_widget
+                    .submit_or_queue_user_message(crate::chatwidget::UserMessage::from(text));
+            }
             AppEvent::StartPlanOnlyCompactAndImplement {
                 plan_text,
                 collaboration_mode,

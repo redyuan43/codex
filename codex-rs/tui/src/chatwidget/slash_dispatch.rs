@@ -7,6 +7,8 @@
 
 use super::*;
 
+const LOOP_USAGE: &str = "Usage: /loop <duration> <prompt>, /loop every <duration> <prompt>, /loop list, or /loop stop [id]";
+
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
     ///
@@ -115,7 +117,10 @@ impl ChatWidget {
             }
             SlashCommand::Loop => {
                 let Some(thread_id) = self.thread_id else {
-                    self.add_error_message("No active thread is available.".to_string());
+                    self.add_info_message(
+                        LOOP_USAGE.to_string(),
+                        Some("Start a session first to open thread alarms.".to_string()),
+                    );
                     return;
                 };
                 self.app_event_tx
@@ -483,20 +488,64 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Loop if !trimmed.is_empty() => {
-                let Some(thread_id) = self.thread_id else {
-                    self.add_error_message("No active thread is available.".to_string());
-                    return;
-                };
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
-                self.app_event_tx.send(AppEvent::CreateThreadAlarmFromSpec {
-                    thread_id,
-                    spec: prepared_args,
-                });
+                if matches!(trimmed, "list" | "ls") {
+                    let descriptions = crate::loop_scheduler::active_loop_descriptions();
+                    if descriptions.is_empty() {
+                        self.add_info_message(
+                            "No active /loop tasks.".to_string(),
+                            /*hint*/ None,
+                        );
+                    } else {
+                        self.add_info_message(
+                            format!("Active /loop tasks: {}", descriptions.join(", ")),
+                            /*hint*/ None,
+                        );
+                    }
+                } else if trimmed == "stop" {
+                    let ids = crate::loop_scheduler::stop_all_loops();
+                    let message = if ids.is_empty() {
+                        "Stopped 0 active /loop tasks.".to_string()
+                    } else {
+                        let ids = ids
+                            .iter()
+                            .map(|id| format!("#{id}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("Stopped active /loop task(s): {ids}.")
+                    };
+                    self.add_info_message(message, /*hint*/ None);
+                } else if let Some(loop_id) = trimmed.strip_prefix("stop ") {
+                    match crate::loop_scheduler::parse_loop_id(loop_id) {
+                        Ok(loop_id) => {
+                            if crate::loop_scheduler::stop_loop(loop_id) {
+                                self.add_info_message(
+                                    format!("Stopped /loop #{loop_id}."),
+                                    /*hint*/ None,
+                                );
+                            } else {
+                                self.add_error_message(format!("No active /loop #{loop_id}."));
+                            }
+                        }
+                        Err(err) => self.add_error_message(err),
+                    }
+                } else {
+                    match crate::loop_scheduler::parse_loop_spec(trimmed) {
+                        Ok(spec) => {
+                            let id = crate::loop_scheduler::schedule_loop(
+                                spec.clone(),
+                                self.app_event_tx.clone(),
+                            );
+                            self.add_info_message(
+                                crate::loop_scheduler::loop_scheduled_message(id, &spec),
+                                Some(
+                                    "This /loop runs while the current TUI process is alive."
+                                        .to_string(),
+                                ),
+                            );
+                        }
+                        Err(err) => self.add_error_message(err),
+                    }
+                }
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Review if !trimmed.is_empty() => {

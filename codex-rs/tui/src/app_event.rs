@@ -563,6 +563,11 @@ pub(crate) enum AppEvent {
         collaboration_mode: CollaborationModeMask,
     },
 
+    /// Submit a user message from an app-level source such as a scheduled loop.
+    SubmitUserMessage {
+        text: String,
+    },
+
     /// Clear the UI, start a fresh session, and implement from a persisted plan file.
     ImplementPlanInFreshSession {
         plan_path: PathBuf,
