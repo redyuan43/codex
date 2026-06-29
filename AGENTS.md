@@ -80,7 +80,7 @@ bash -ic 'type siyuan; siyuan --version'
 
 ```text
 siyuan is aliased to `/home/ivan/github/codex/codex-rs/target/debug/codex'
-codex-cli 0.0.0
+codex-cli 0.18.0-siyuan.1
 ```
 
 注意点：
