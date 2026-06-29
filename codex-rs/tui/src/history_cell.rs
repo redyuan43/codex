@@ -1259,7 +1259,6 @@ impl SessionHeaderHistoryCell {
 
         formatted
     }
-
 }
 
 impl HistoryCell for SessionHeaderHistoryCell {
