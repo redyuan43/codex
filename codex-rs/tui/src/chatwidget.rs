@@ -1382,6 +1382,7 @@ fn hook_run_summary_from_notification(
         display_order: run.display_order,
         status: run.status.to_core(),
         status_message: run.status_message,
+        summary_input: run.summary_input,
         started_at: run.started_at,
         completed_at: run.completed_at,
         duration_ms: run.duration_ms,
@@ -4233,6 +4234,16 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        let has_summary_source = event
+            .run
+            .summary_input
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || !event.run.entries.is_empty()
+            || event.run.status != codex_protocol::protocol::HookRunStatus::Completed;
+        let summary = has_summary_source
+            .then(|| history_cell::summarize_hook_run(&event.run))
+            .flatten();
         let status = format!("{:?}", event.run.status).to_lowercase();
         let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
         let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
@@ -4247,6 +4258,10 @@ impl ChatWidget {
             lines.push(format!("  {prefix}{}", entry.text).into());
         }
         self.add_to_history(PlainHistoryCell::new(lines));
+        if let Some(summary) = summary {
+            self.bottom_pane
+                .set_live_placeholder_summary(Some(format!("摘要：{summary}")));
+        }
         self.request_redraw();
     }
 

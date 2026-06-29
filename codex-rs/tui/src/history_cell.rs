@@ -65,6 +65,9 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::HookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -1675,6 +1678,143 @@ impl HistoryCell for DeprecationNoticeCell {
 
         lines
     }
+}
+
+pub(crate) fn summarize_hook_run(run: &HookRunSummary) -> Option<String> {
+    fallback_hook_summary(run)
+}
+
+fn fallback_hook_summary(run: &HookRunSummary) -> Option<String> {
+    if let Some(summary_input) = run.summary_input.as_deref() {
+        let text = clean_hook_summary_text(summary_input);
+        if !text.is_empty() {
+            return Some(limit_summary_chars(&text, 90));
+        }
+    }
+
+    let selected = run
+        .entries
+        .iter()
+        .find(|entry| entry.kind == HookOutputEntryKind::Stop)
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Error)
+        })
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Feedback)
+        })
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Warning)
+        })
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Context)
+        });
+
+    let (kind, text) = match selected {
+        Some(entry) => (Some(entry.kind), clean_hook_summary_text(&entry.text)),
+        None => (
+            None,
+            run.status_message
+                .as_deref()
+                .map(clean_hook_summary_text)
+                .unwrap_or_default(),
+        ),
+    };
+    if text.is_empty() {
+        return None;
+    }
+
+    let summary = match kind {
+        Some(HookOutputEntryKind::Stop | HookOutputEntryKind::Error) => {
+            format!("Hook 已拦截，需要处理：{text}")
+        }
+        Some(HookOutputEntryKind::Feedback) => {
+            format!("Hook 给出下一步建议：{text}")
+        }
+        Some(HookOutputEntryKind::Warning) => {
+            format!("Hook 提醒注意风险：{text}")
+        }
+        Some(HookOutputEntryKind::Context) => {
+            if run.status == HookRunStatus::Completed {
+                format!("Hook 补充上下文：{text}")
+            } else {
+                format!("Hook 状态需要关注：{text}")
+            }
+        }
+        None => match run.status {
+            HookRunStatus::Completed => format!("Hook 状态：{text}"),
+            HookRunStatus::Failed | HookRunStatus::Blocked | HookRunStatus::Stopped => {
+                format!("Hook 状态需要关注：{text}")
+            }
+            HookRunStatus::Running => format!("Hook 正在处理：{text}"),
+        },
+    };
+    Some(limit_summary_chars(&summary, 90))
+}
+
+fn clean_hook_summary_text(value: &str) -> String {
+    let without_fences = remove_code_fences(value);
+    let mut output = String::new();
+    for line in without_fences.replace('\r', "").lines() {
+        let trimmed = line.trim();
+        let cleaned = trimmed
+            .trim_start_matches(['#', '>', '-', '*', '•', ' '])
+            .replace(['#', '*', '_', '`', '>'], "");
+        if cleaned.is_empty() || looks_like_path_or_source(&cleaned) {
+            continue;
+        }
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        output.push_str(&cleaned);
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn remove_code_fences(value: &str) -> String {
+    let mut output = String::new();
+    let mut in_code = false;
+    for line in value.replace('\r', "").lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+    output
+}
+
+fn looks_like_path_or_source(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("device:")
+        || lower.starts_with("cwd:")
+        || lower.starts_with("source:")
+        || lower.starts_with("path:")
+        || value.starts_with('/')
+        || value.starts_with("~/")
+}
+
+fn limit_summary_chars(value: &str, max_chars: usize) -> String {
+    let mut summary = String::new();
+    for ch in value.chars().take(max_chars) {
+        summary.push(ch);
+    }
+    if value.chars().count() > max_chars {
+        summary.push('…');
+    }
+    summary
 }
 
 /// Render a summary of configured MCP servers from the current `Config`.
@@ -4536,6 +4676,36 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+    }
+
+    #[test]
+    fn hook_summary_prefers_assistant_summary_input() {
+        let summary = summarize_hook_run(&HookRunSummary {
+            id: "stop:0:/tmp/hooks.json".to_string(),
+            event_name: codex_protocol::protocol::HookEventName::Stop,
+            handler_type: codex_protocol::protocol::HookHandlerType::Command,
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+            scope: codex_protocol::protocol::HookScope::Turn,
+            source_path: PathBuf::from("/tmp/hooks.json"),
+            display_order: 0,
+            status: HookRunStatus::Completed,
+            status_message: Some("completed".to_string()),
+            summary_input: Some(
+                "Implemented the local summary path.\n\n```text\nsource noise\n```".to_string(),
+            ),
+            started_at: 1,
+            completed_at: Some(2),
+            duration_ms: Some(1),
+            entries: vec![codex_protocol::protocol::HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "This warning should not win".to_string(),
+            }],
+        });
+
+        assert_eq!(
+            summary,
+            Some("Implemented the local summary path.".to_string())
+        );
     }
 
     #[test]
