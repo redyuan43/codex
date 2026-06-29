@@ -7,6 +7,14 @@ on:
         description: "npm package version"
         required: true
         default: "0.18.0-siyuan.1"
+      publish_npm:
+        description: "Publish the generated tarball to npm"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 permissions:
   contents: write
@@ -193,6 +201,38 @@ jobs:
           "$prefix/bin/siyuan" --version
           "$prefix/bin/codex" --version
 
+      - name: Stage executable release assets
+        run: |
+          set -euo pipefail
+          assets_dir="dist/siyuan-release-assets"
+          mkdir -p "$assets_dir"
+
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            package_dir="${RUNNER_TEMP}/siyuan-codex-${target}"
+            rm -rf "$package_dir"
+            mkdir -p "$package_dir"
+
+            cp "dist/siyuan-vendor/${target}/codex/codex" "$package_dir/codex"
+            cp "dist/siyuan-vendor/${target}/path/codex-linux-sandbox" "$package_dir/codex-linux-sandbox"
+            chmod +x "$package_dir/codex" "$package_dir/codex-linux-sandbox"
+
+            cat > "$package_dir/README.txt" <<EOF
+          Siyuan Codex ${VERSION}
+          Target: ${target}
+
+          Files:
+          - codex
+          - codex-linux-sandbox
+
+          Verify:
+            ./codex --version
+          EOF
+
+            tar -C "$package_dir" -czf "$assets_dir/siyuan-codex-${VERSION}-${target}.tar.gz" .
+          done
+
+          (cd "$assets_dir" && sha256sum *.tar.gz > "siyuan-codex-${VERSION}-checksums.txt")
+
       - name: Upload npm tarball
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -216,13 +256,22 @@ jobs:
           npm install -g https://github.com/redyuan43/codex/releases/download/${release_tag}/siyuan-codex-npm-${VERSION}.tgz
           \`\`\`
 
-          This release contains x86_64-unknown-linux-musl and aarch64-unknown-linux-musl vendor binaries.
+          Direct executable downloads are also attached:
+
+          - siyuan-codex-${VERSION}-x86_64-unknown-linux-musl.tar.gz
+          - siyuan-codex-${VERSION}-aarch64-unknown-linux-musl.tar.gz
+          - siyuan-codex-${VERSION}-checksums.txt
+
+          Each executable archive contains:
+
+          - codex
+          - codex-linux-sandbox
           EOF
 
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$release_tag" "$tarball" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$release_tag" "$tarball" dist/siyuan-release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$release_tag" "$tarball" \
+            gh release create "$release_tag" "$tarball" dist/siyuan-release-assets/* \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "Siyuan Codex ${VERSION}" \
@@ -230,6 +279,7 @@ jobs:
           fi
 
       - name: Publish to npm
+        if: ${{ inputs.publish_npm == 'true' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish "dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz" --access public
