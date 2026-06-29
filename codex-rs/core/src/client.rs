@@ -810,10 +810,10 @@ fn create_responses_api_tools_json(
     provider_id: &str,
     tools: &[ToolSpec],
 ) -> std::result::Result<Vec<serde_json::Value>, serde_json::Error> {
-    if provider_id == LLAMACPP_OSS_PROVIDER_ID {
-        create_function_tools_json_for_responses_api(tools)
-    } else {
-        create_tools_json_for_responses_api(tools)
+    match provider_id {
+        LMSTUDIO_OSS_PROVIDER_ID => Ok(Vec::new()),
+        LLAMACPP_OSS_PROVIDER_ID => create_function_tools_json_for_responses_api(tools),
+        _ => create_tools_json_for_responses_api(tools),
     }
 }
 
