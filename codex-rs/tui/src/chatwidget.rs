@@ -265,6 +265,50 @@ const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 const LOOP_USAGE: &str = "Usage: /loop <duration> <prompt>, /loop every <duration> <prompt>, /loop list, or /loop stop [id]";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReasoningShortcutDirection {
+    Lower,
+    Raise,
+}
+
+impl ReasoningShortcutDirection {
+    fn bound_message(self) -> String {
+        match self {
+            Self::Lower => "推理现在已经是最弱了。".to_string(),
+            Self::Raise => "推理现在已经是最强了。".to_string(),
+        }
+    }
+
+    fn changed_message(self) -> String {
+        match self {
+            Self::Lower => "模型现在变弱了。".to_string(),
+            Self::Raise => "模型现在有变强了。".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelShortcutDirection {
+    Cheaper,
+    Stronger,
+}
+
+impl ModelShortcutDirection {
+    fn bound_message(self) -> String {
+        match self {
+            Self::Cheaper => "模型现在已经是最低级别了。".to_string(),
+            Self::Stronger => "模型现在已经是最高级别了。".to_string(),
+        }
+    }
+
+    fn changed_message(self) -> String {
+        match self {
+            Self::Cheaper => "模型现在级别变低了。".to_string(),
+            Self::Stronger => "模型现在级别变高了。".to_string(),
+        }
+    }
+}
+
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
 /// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
@@ -5334,6 +5378,18 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::ThinkMore => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Raise);
+            }
+            SlashCommand::ThinkLess => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Lower);
+            }
+            SlashCommand::ModelUp => {
+                self.handle_model_slash_command(ModelShortcutDirection::Stronger);
+            }
+            SlashCommand::ModelDown => {
+                self.handle_model_slash_command(ModelShortcutDirection::Cheaper);
+            }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
                     None
@@ -8868,6 +8924,119 @@ impl ChatWidget {
             .send(AppEvent::PersistModelSelection { model, effort });
     }
 
+    fn apply_model_and_effort_for_all_modes_with_message(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        message: String,
+    ) {
+        self.apply_model_and_effort_without_persist(model.clone(), effort);
+        if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
+            self.app_event_tx
+                .send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+            self.app_event_tx
+                .send(AppEvent::PersistPlanModeReasoningEffort(effort));
+        }
+        self.app_event_tx
+            .send(AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort,
+                message,
+            });
+    }
+
+    fn handle_reasoning_slash_command(&mut self, direction: ReasoningShortcutDirection) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Reasoning shortcuts are disabled until startup completes.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let current_model = self.current_model().to_string();
+        let Some(preset) = self.current_model_preset() else {
+            self.add_info_message(
+                format!("Reasoning shortcuts are unavailable for {current_model}."),
+                /*hint*/ None,
+            );
+            return;
+        };
+
+        let choices = reasoning_choices(&preset);
+        let current_effort = self
+            .effective_reasoning_effort()
+            .unwrap_or(preset.default_reasoning_effort);
+        let Some(next_effort) = next_reasoning_effort(&choices, current_effort, direction) else {
+            self.add_info_message(direction.bound_message(), /*hint*/ None);
+            return;
+        };
+
+        self.apply_model_and_effort_for_all_modes_with_message(
+            current_model,
+            Some(next_effort),
+            direction.changed_message(),
+        );
+    }
+
+    fn handle_model_slash_command(&mut self, direction: ModelShortcutDirection) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Model shortcuts are disabled until startup completes.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let presets = match self.model_catalog.try_list_models() {
+            Ok(models) => concrete_model_presets(models),
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try again in a moment.".to_string(),
+                    /*hint*/ None,
+                );
+                return;
+            }
+        };
+        let current_model = self.current_model().to_string();
+        let Some(current_idx) = presets
+            .iter()
+            .position(|preset| preset.model == current_model)
+        else {
+            self.add_info_message(
+                format!("Model shortcuts are unavailable for {current_model}."),
+                /*hint*/ None,
+            );
+            return;
+        };
+        let Some(next_idx) = next_model_index(&presets, current_idx, direction) else {
+            self.add_info_message(direction.bound_message(), /*hint*/ None);
+            return;
+        };
+
+        let next_preset = &presets[next_idx];
+        let requested_effort = self.effective_reasoning_effort().or_else(|| {
+            self.current_model_preset()
+                .map(|preset| preset.default_reasoning_effort)
+        });
+        let next_effort = nearest_supported_effort(next_preset, requested_effort)
+            .or(Some(next_preset.default_reasoning_effort));
+        self.apply_model_and_effort_for_all_modes_with_message(
+            next_preset.model.clone(),
+            next_effort,
+            direction.changed_message(),
+        );
+    }
+
+    fn current_model_preset(&self) -> Option<ModelPreset> {
+        let current_model = self.current_model();
+        self.model_catalog
+            .try_list_models()
+            .ok()?
+            .into_iter()
+            .find(|preset| preset.model == current_model)
+    }
+
     /// Open the permissions popup (alias for /permissions).
     pub(crate) fn open_approvals_popup(&mut self) {
         self.open_permissions_popup();
@@ -11598,6 +11767,94 @@ fn summarize_mcp_progress(invocation: &McpInvocation) -> Option<String> {
     let server = normalize_summary_line(&invocation.server)?;
     let tool = normalize_summary_line(&invocation.tool)?;
     Some(format!("Completed {server}/{tool}"))
+}
+
+fn concrete_model_presets(models: Vec<ModelPreset>) -> Vec<ModelPreset> {
+    models
+        .into_iter()
+        .filter(|preset| preset.show_in_picker && !ChatWidget::is_auto_model(&preset.model))
+        .collect()
+}
+
+fn next_model_index(
+    presets: &[ModelPreset],
+    current_idx: usize,
+    direction: ModelShortcutDirection,
+) -> Option<usize> {
+    match direction {
+        ModelShortcutDirection::Cheaper => current_idx
+            .checked_add(1)
+            .filter(|idx| *idx < presets.len()),
+        ModelShortcutDirection::Stronger => current_idx.checked_sub(1),
+    }
+}
+
+fn reasoning_choices(preset: &ModelPreset) -> Vec<ReasoningEffortConfig> {
+    let mut choices = Vec::new();
+    for effort in ReasoningEffortConfig::iter() {
+        if preset
+            .supported_reasoning_efforts
+            .iter()
+            .any(|option| option.effort == effort)
+        {
+            choices.push(effort);
+        }
+    }
+    if choices.is_empty() {
+        choices.push(preset.default_reasoning_effort);
+    }
+    choices
+}
+
+fn next_reasoning_effort(
+    choices: &[ReasoningEffortConfig],
+    current_effort: ReasoningEffortConfig,
+    direction: ReasoningShortcutDirection,
+) -> Option<ReasoningEffortConfig> {
+    let current_idx = choices
+        .iter()
+        .position(|choice| *choice == current_effort)
+        .unwrap_or_else(|| nearest_choice_index(choices, current_effort));
+    match direction {
+        ReasoningShortcutDirection::Lower => current_idx.checked_sub(1),
+        ReasoningShortcutDirection::Raise => current_idx
+            .checked_add(1)
+            .filter(|idx| *idx < choices.len()),
+    }
+    .map(|idx| choices[idx])
+}
+
+fn nearest_supported_effort(
+    preset: &ModelPreset,
+    requested_effort: Option<ReasoningEffortConfig>,
+) -> Option<ReasoningEffortConfig> {
+    let requested_effort = requested_effort?;
+    let choices = reasoning_choices(preset);
+    let requested_rank = effort_rank(requested_effort);
+    choices
+        .into_iter()
+        .min_by_key(|choice| (effort_rank(*choice) - requested_rank).abs())
+}
+
+fn nearest_choice_index(choices: &[ReasoningEffortConfig], target: ReasoningEffortConfig) -> usize {
+    let target_rank = effort_rank(target);
+    choices
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, choice)| (effort_rank(**choice) - target_rank).abs())
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
+}
+
+fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
+    match effort {
+        ReasoningEffortConfig::None => 0,
+        ReasoningEffortConfig::Minimal => 1,
+        ReasoningEffortConfig::Low => 2,
+        ReasoningEffortConfig::Medium => 3,
+        ReasoningEffortConfig::High => 4,
+        ReasoningEffortConfig::XHigh => 5,
+    }
 }
 
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {

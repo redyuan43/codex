@@ -341,6 +341,13 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
+    /// Persist model selection and show a caller-provided success message.
+    PersistModelSelectionWithMessage {
+        model: String,
+        effort: Option<ReasoningEffort>,
+        message: String,
+    },
+
     /// Persist the selected personality to the appropriate config.
     PersistPersonalitySelection {
         personality: Personality,

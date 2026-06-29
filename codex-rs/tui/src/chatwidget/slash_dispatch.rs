@@ -134,6 +134,18 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::ThinkMore => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Raise);
+            }
+            SlashCommand::ThinkLess => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Lower);
+            }
+            SlashCommand::ModelUp => {
+                self.handle_model_slash_command(ModelShortcutDirection::Stronger);
+            }
+            SlashCommand::ModelDown => {
+                self.handle_model_slash_command(ModelShortcutDirection::Cheaper);
+            }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
                     None

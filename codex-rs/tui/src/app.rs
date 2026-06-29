@@ -5068,6 +5068,41 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort,
+                message,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_model(Some(model.as_str()), effort)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let effort_label = effort
+                            .map(|selected_effort| selected_effort.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save model for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
