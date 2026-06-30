@@ -84,6 +84,7 @@ codex-cli 0.142.4-siyuan.6
 ```
 
 注意点：
+
 - 新终端会自动读取 `~/.bashrc`；当前终端需要 `source ~/.bashrc`。
 - `type -a siyuan` 可能仍列出 `/home/ivan/.local/bin/siyuan`，但交互式 bash 中 alias 优先级更高。
 - `which siyuan` 不一定显示 alias；排查时优先用 `type siyuan`。
@@ -142,6 +143,7 @@ cargo build -p codex-cli
 ```
 
 已遇到的本机验证问题：
+
 - `just fmt` 在 Rust 格式化后会继续跑 Python SDK `ruff`，当前 Linux manylinux 环境可能因 `openai-codex-cli-bin==0.131.0a4` 缺 wheel 失败；可补跑 `cargo fmt -- --config imports_granularity=Item`，stable rustfmt 对该配置会输出 warning 但退出码可为 0。
 - 完整 `cargo test -p codex-tui` 曾在无关测试 `discard_side_thread_keeps_local_state_when_server_close_fails` 处 stack overflow abort；针对本次 TUI header/tooltip 改动可先跑上面的聚焦测试。
 
