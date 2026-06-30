@@ -138,12 +138,9 @@ jobs:
           - name: Linux
             runner: ubuntu-24.04
             timeout_minutes: 30
-          - name: macOS
-            runner: macos-15
-            timeout_minutes: 30
-          - name: Windows
-            runner: windows-latest
-            timeout_minutes: 30
+          # The fork PR workflow keeps the prebuilt lint check on Linux only.
+          # macOS Bazel analysis currently depends on downloading Apple's CLT
+          # SDK, which can return 403 on GitHub-hosted runners.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-bazel-ci
