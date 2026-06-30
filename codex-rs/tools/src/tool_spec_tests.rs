@@ -1,4 +1,4 @@
-use super::ConfiguredToolSpec;
+use super::ResponsesApiNamespace;
 use super::ResponsesApiWebSearchFilters;
 use super::ResponsesApiWebSearchUserLocation;
 use super::ToolSpec;
@@ -6,8 +6,8 @@ use crate::AdditionalProperties;
 use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
-use crate::create_function_tools_json_for_responses_api;
 use crate::create_tools_json_for_responses_api;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
@@ -36,6 +36,15 @@ fn tool_spec_name_covers_all_variants() {
         "lookup_order"
     );
     assert_eq!(
+        ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "mcp__demo__".to_string(),
+            description: "Demo tools".to_string(),
+            tools: Vec::new(),
+        })
+        .name(),
+        "mcp__demo__"
+    );
+    assert_eq!(
         ToolSpec::ToolSearch {
             execution: "sync".to_string(),
             description: "Search for tools".to_string(),
@@ -48,7 +57,6 @@ fn tool_spec_name_covers_all_variants() {
         .name(),
         "tool_search"
     );
-    assert_eq!(ToolSpec::LocalShell {}.name(), "local_shell");
     assert_eq!(
         ToolSpec::ImageGeneration {
             output_format: "png".to_string(),
@@ -59,6 +67,7 @@ fn tool_spec_name_covers_all_variants() {
     assert_eq!(
         ToolSpec::WebSearch {
             external_web_access: Some(true),
+            index_gated_web_access: None,
             filters: None,
             user_location: None,
             search_context_size: None,
@@ -79,29 +88,6 @@ fn tool_spec_name_covers_all_variants() {
         })
         .name(),
         "exec"
-    );
-}
-
-#[test]
-fn configured_tool_spec_name_delegates_to_tool_spec() {
-    assert_eq!(
-        ConfiguredToolSpec::new(
-            ToolSpec::Function(ResponsesApiTool {
-                name: "lookup_order".to_string(),
-                description: "Look up an order".to_string(),
-                strict: false,
-                defer_loading: None,
-                parameters: JsonSchema::object(
-                    BTreeMap::new(),
-                    /*required*/ None,
-                    /*additional_properties*/ None
-                ),
-                output_schema: None,
-            }),
-            /*supports_parallel_tool_calls*/ true,
-        )
-        .name(),
-        "lookup_order"
     );
 }
 
@@ -165,47 +151,47 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
 }
 
 #[test]
-fn create_function_tools_json_for_responses_api_filters_non_function_tools() {
+fn namespace_tool_spec_serializes_expected_wire_shape() {
     assert_eq!(
-        create_function_tools_json_for_responses_api(&[
-            ToolSpec::LocalShell {},
-            ToolSpec::Function(ResponsesApiTool {
-                name: "demo".to_string(),
-                description: "A demo tool".to_string(),
+        serde_json::to_value(ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "mcp__demo__".to_string(),
+            description: "Demo tools".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "lookup_order".to_string(),
+                description: "Look up an order".to_string(),
                 strict: false,
                 defer_loading: None,
                 parameters: JsonSchema::object(
-                    BTreeMap::from([
-                        ("foo".to_string(), JsonSchema::string(/*description*/ None),)
-                    ]),
+                    BTreeMap::from([(
+                        "order_id".to_string(),
+                        JsonSchema::string(/*description*/ None),
+                    )]),
                     /*required*/ None,
-                    /*additional_properties*/ None
+                    /*additional_properties*/ None,
                 ),
                 output_schema: None,
-            }),
-            ToolSpec::Freeform(FreeformTool {
-                name: "exec".to_string(),
-                description: "Run a command".to_string(),
-                format: FreeformToolFormat {
-                    r#type: "grammar".to_string(),
-                    syntax: "lark".to_string(),
-                    definition: "start: \"exec\"".to_string(),
+            })],
+        }))
+        .expect("serialize namespace tool"),
+        json!({
+            "type": "namespace",
+            "name": "mcp__demo__",
+            "description": "Demo tools",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_order",
+                    "description": "Look up an order",
+                    "strict": false,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "order_id": { "type": "string" },
+                        },
+                    },
                 },
-            }),
-        ])
-        .expect("serialize function-only tools"),
-        vec![json!({
-            "type": "function",
-            "name": "demo",
-            "description": "A demo tool",
-            "strict": false,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "foo": { "type": "string" }
-                },
-            },
-        })]
+            ],
+        })
     );
 }
 
@@ -214,6 +200,7 @@ fn web_search_tool_spec_serializes_expected_wire_shape() {
     assert_eq!(
         serde_json::to_value(ToolSpec::WebSearch {
             external_web_access: Some(true),
+            index_gated_web_access: None,
             filters: Some(ResponsesApiWebSearchFilters {
                 allowed_domains: Some(vec!["example.com".to_string()]),
             }),

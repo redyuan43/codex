@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests/session_summary.rs
+assertion_line: 16
+expression: normalized_backend_snapshot(terminal.backend())
+---
+"                                                                                "
+"                                                                                "
+"› Applied code changes                                                          "
+"                                                                                "
+"  gpt-5.5 default · /tmp/project                                                "

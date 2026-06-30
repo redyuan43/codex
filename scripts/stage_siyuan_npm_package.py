@@ -34,9 +34,7 @@ def parse_args() -> argparse.Namespace:
         "--vendor-root",
         type=Path,
         required=True,
-        help=(
-            "Directory containing canonical Codex packages named by target triple."
-        ),
+        help=("Directory containing canonical Codex packages named by target triple."),
     )
     parser.add_argument(
         "--target",

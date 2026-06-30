@@ -1,12 +1,17 @@
+mod chatgpt_cloudflare_cookies;
+mod chatgpt_hosts;
 mod custom_ca;
 mod default_client;
 mod error;
+mod outbound_proxy;
 mod request;
 mod retry;
 mod sse;
 mod telemetry;
 mod transport;
 
+pub use crate::chatgpt_cloudflare_cookies::with_chatgpt_cloudflare_cookie_store;
+pub use crate::chatgpt_hosts::is_allowed_chatgpt_host;
 pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///
@@ -21,6 +26,13 @@ pub use crate::default_client::CodexHttpClient;
 pub use crate::default_client::CodexRequestBuilder;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;
+pub use crate::outbound_proxy::BuildRouteAwareHttpClientError;
+pub use crate::outbound_proxy::ClientRouteClass;
+pub use crate::outbound_proxy::OutboundProxyConfig;
+pub use crate::outbound_proxy::RouteFailureClass;
+pub use crate::outbound_proxy::build_reqwest_client_for_route;
+pub use crate::request::EncodedJsonBody;
+pub use crate::request::PreparedRequestBody;
 pub use crate::request::Request;
 pub use crate::request::RequestBody;
 pub use crate::request::RequestCompression;

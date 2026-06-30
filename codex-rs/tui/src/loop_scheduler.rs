@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_protocol::config_types::CollaborationModeMask;
 
 const LOOP_USAGE: &str =
     "Usage: /loop <duration> <prompt>, /loop every <duration> <prompt>, or /loop stop [id]";
@@ -68,8 +69,15 @@ pub(crate) fn schedule_loop(spec: LoopSpec, tx: AppEventSender) -> LoopId {
     let handle = tokio::spawn(async move {
         loop {
             tokio::time::sleep(spec.interval).await;
-            tx.send(AppEvent::SubmitUserMessage {
+            tx.send(AppEvent::SubmitUserMessageWithMode {
                 text: spec.prompt.clone(),
+                collaboration_mode: CollaborationModeMask {
+                    name: "Default".to_string(),
+                    mode: None,
+                    model: None,
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
             });
             if !spec.repeat {
                 break;
@@ -260,7 +268,7 @@ mod tests {
             .await
             .expect("scheduled event should arrive")
             .expect("app event channel should stay open");
-        let AppEvent::SubmitUserMessage { text } = event else {
+        let AppEvent::SubmitUserMessageWithMode { text, .. } = event else {
             panic!("expected scheduled user message event, got {event:?}");
         };
         assert_eq!(text, "check status");

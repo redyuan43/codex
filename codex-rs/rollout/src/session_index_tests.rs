@@ -25,20 +25,27 @@ fn write_rollout_with_metadata(path: &Path, thread_id: ThreadId) -> std::io::Res
         timestamp: timestamp.clone(),
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
+                session_id: thread_id.into(),
                 id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 timestamp,
                 cwd: ".".into(),
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::Cli,
+                thread_source: None,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
                 model_provider: Some("test-provider".into()),
                 base_instructions: None,
                 dynamic_tools: None,
+                selected_capability_roots: Vec::new(),
                 memory_mode: None,
+                history_mode: Default::default(),
+                multi_agent_version: None,
+                context_window: None,
             },
             git: None,
         }),
@@ -73,7 +80,7 @@ fn find_thread_id_by_name_prefers_latest_entry() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn find_thread_path_by_name_str_skips_newest_entry_without_rollout() -> std::io::Result<()> {
+async fn find_thread_meta_by_name_str_skips_newest_entry_without_rollout() -> std::io::Result<()> {
     // A newer unsaved name entry should not shadow an older persisted rollout with the same name.
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
@@ -99,14 +106,17 @@ async fn find_thread_path_by_name_str_skips_newest_entry_without_rollout() -> st
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_path_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same", /*state_db_ctx*/ None).await?;
 
-    assert_eq!(found, Some(saved_rollout_path));
+    assert_eq!(
+        found.map(|(path, session_meta)| (path, session_meta.meta.id)),
+        Some((saved_rollout_path, saved_id))
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn find_thread_path_by_name_str_skips_partial_rollout() -> std::io::Result<()> {
+async fn find_thread_meta_by_name_str_skips_partial_rollout() -> std::io::Result<()> {
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
     let saved_id = ThreadId::new();
@@ -133,14 +143,14 @@ async fn find_thread_path_by_name_str_skips_partial_rollout() -> std::io::Result
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_path_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same", /*state_db_ctx*/ None).await?;
 
-    assert_eq!(found, Some(saved_rollout_path));
+    assert_eq!(found.map(|(path, _)| path), Some(saved_rollout_path));
     Ok(())
 }
 
 #[tokio::test]
-async fn find_thread_path_by_name_str_ignores_historical_name_after_rename() -> std::io::Result<()>
+async fn find_thread_meta_by_name_str_ignores_historical_name_after_rename() -> std::io::Result<()>
 {
     let temp = TempDir::new()?;
     let path = session_index_path(temp.path());
@@ -171,9 +181,9 @@ async fn find_thread_path_by_name_str_ignores_historical_name_after_rename() -> 
     ];
     write_index(&path, &lines)?;
 
-    let found = find_thread_path_by_name_str(temp.path(), "same").await?;
+    let found = find_thread_meta_by_name_str(temp.path(), "same", /*state_db_ctx*/ None).await?;
 
-    assert_eq!(found, Some(current_rollout_path));
+    assert_eq!(found.map(|(path, _)| path), Some(current_rollout_path));
     Ok(())
 }
 

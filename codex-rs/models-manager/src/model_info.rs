@@ -27,7 +27,13 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         model.supports_reasoning_summaries = true;
     }
     if let Some(context_window) = config.model_context_window {
-        model.context_window = Some(context_window);
+        model.context_window = Some(
+            model
+                .max_context_window
+                .map_or(context_window, |max_context_window| {
+                    context_window.min(max_context_window)
+                }),
+        );
     }
     if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
         model.auto_compact_token_limit = Some(auto_compact_token_limit);
@@ -70,10 +76,13 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         supported_in_api: true,
         priority: 99,
         additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
         availability_nux: None,
         upgrade: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
         model_messages: local_personality_messages_for_slug(slug),
+        include_skills_usage_instructions: false,
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -84,12 +93,18 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
+        max_context_window: Some(272_000),
         auto_compact_token_limit: None,
+        comp_hash: None,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
+        tool_mode: None,
+        multi_agent_version: None,
     }
 }
 

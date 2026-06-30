@@ -2,10 +2,9 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn progress_placeholder_shows_anchor_and_recent_progress_snapshot() {
+async fn progress_placeholder_shows_recent_progress_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;
-    chat.set_session_context_anchor(Some("修复输入框提示".to_string()));
     chat.set_recent_progress_summary(Some("Applied code changes".to_string()));
 
     let height = chat.desired_height(/*width*/ 80);
@@ -15,58 +14,58 @@ async fn progress_placeholder_shows_anchor_and_recent_progress_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw chat widget");
     assert_chatwidget_snapshot!(
-        "progress_placeholder_shows_anchor_and_recent_progress",
+        "progress_placeholder_shows_recent_progress",
         normalized_backend_snapshot(terminal.backend())
     );
 }
 
 #[tokio::test]
-async fn short_chinese_task_message_seeds_anchor() {
+async fn hook_summary_placeholder_uses_cleaned_summary_input_after_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut run = hook_run(
+        "stop-hook-1",
+        AppServerHookEventName::Stop,
+        AppServerHookRunStatus::Completed,
+        "stop hook",
+        Vec::new(),
+    );
+    run.summary_input = Some(
+        "Implemented the local summary path.\n```text\nsource: generated/noise.rs\n```".to_string(),
+    );
 
-    chat.maybe_seed_session_context_anchor("修复提示");
-
-    assert_eq!(chat.session_context_anchor.as_deref(), Some("修复提示"));
-}
-
-#[tokio::test]
-async fn short_operational_follow_up_does_not_override_anchor() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.maybe_seed_session_context_anchor("修复输入框提示");
-    chat.maybe_seed_session_context_anchor("继续");
+    handle_hook_completed(&mut chat, run);
+    handle_turn_completed(&mut chat, "turn-1", Some(10));
 
     assert_eq!(
-        chat.session_context_anchor.as_deref(),
-        Some("修复输入框提示")
+        chat.hook_placeholder_summary.as_deref(),
+        Some("摘要：Implemented the local summary path.")
     );
 }
 
 #[tokio::test]
 async fn successful_exec_updates_recent_progress_summary() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.clone();
 
-    chat.handle_exec_end_now(ExecCommandEndEvent {
-        call_id: "exec-1".to_string(),
-        process_id: None,
-        turn_id: "turn-1".to_string(),
-        command: vec!["rg".to_string(), "placeholder".to_string()],
-        cwd: PathBuf::from("/tmp"),
-        parsed_cmd: vec![ParsedCommand::Search {
-            cmd: "rg placeholder".to_string(),
-            query: Some("placeholder".to_string()),
-            path: None,
-        }],
-        source: ExecCommandSource::Agent,
-        interaction_input: None,
-        stdout: String::new(),
-        stderr: String::new(),
-        aggregated_output: String::new(),
-        exit_code: 0,
-        duration: Duration::from_millis(10),
-        formatted_output: String::new(),
-        status: CoreExecCommandStatus::Completed,
-    });
+    handle_exec_end(
+        &mut chat,
+        AppServerThreadItem::CommandExecution {
+            id: "exec-1".to_string(),
+            command: "rg placeholder".to_string(),
+            cwd: cwd.into(),
+            process_id: None,
+            source: ExecCommandSource::Agent,
+            status: AppServerCommandExecutionStatus::Completed,
+            command_actions: vec![AppServerCommandAction::Search {
+                command: "rg placeholder".to_string(),
+                query: Some("placeholder".to_string()),
+                path: None,
+            }],
+            aggregated_output: None,
+            exit_code: Some(0),
+            duration_ms: Some(10),
+        },
+    );
 
     assert_eq!(
         chat.recent_progress_summary.as_deref(),
@@ -75,35 +74,89 @@ async fn successful_exec_updates_recent_progress_summary() {
 }
 
 #[tokio::test]
+async fn failed_exec_keeps_recent_progress_summary() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_recent_progress_summary(Some("Applied code changes".to_string()));
+    let cwd = chat.config.cwd.clone();
+
+    handle_exec_end(
+        &mut chat,
+        AppServerThreadItem::CommandExecution {
+            id: "exec-1".to_string(),
+            command: "rg placeholder".to_string(),
+            cwd: cwd.into(),
+            process_id: None,
+            source: ExecCommandSource::Agent,
+            status: AppServerCommandExecutionStatus::Failed,
+            command_actions: vec![AppServerCommandAction::Search {
+                command: "rg placeholder".to_string(),
+                query: Some("placeholder".to_string()),
+                path: None,
+            }],
+            aggregated_output: None,
+            exit_code: Some(1),
+            duration_ms: Some(10),
+        },
+    );
+
+    assert_eq!(
+        chat.recent_progress_summary.as_deref(),
+        Some("Applied code changes")
+    );
+}
+
+#[tokio::test]
+async fn status_header_updates_live_stage_summary() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_status_header("Tracing render path".to_string());
+
+    assert_eq!(
+        chat.live_stage_summary.as_deref(),
+        Some("Tracing render path")
+    );
+}
+
+#[tokio::test]
+async fn turn_start_updates_live_stage_and_keeps_recent_progress() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_recent_progress_summary(Some("Applied code changes".to_string()));
+    chat.set_status_header("Tracing render path".to_string());
+
+    handle_turn_started(&mut chat, "turn-1");
+
+    assert_eq!(chat.live_stage_summary, None);
+    assert_eq!(
+        chat.recent_progress_summary.as_deref(),
+        Some("Applied code changes")
+    );
+}
+
+#[tokio::test]
+async fn successful_patch_updates_recent_progress_summary() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_file_change_completed_now(AppServerThreadItem::FileChange {
+        id: "patch-1".to_string(),
+        changes: Vec::new(),
+        status: AppServerPatchApplyStatus::Completed,
+    });
+
+    assert_eq!(
+        chat.recent_progress_summary.as_deref(),
+        Some("Applied code changes")
+    );
+}
+
+#[tokio::test]
 async fn recent_progress_survives_turn_complete_after_status_resets() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_session_context_anchor(Some("修复输入框提示".to_string()));
     chat.set_recent_progress_summary(Some("Applied code changes".to_string()));
+    chat.set_status_header("Tracing render path".to_string());
 
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "turn-1".to_string(),
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "**Tracing render path**".into(),
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "task-1".into(),
-        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "turn-1".to_string(),
-            last_agent_message: None,
-            completed_at: None,
-            duration_ms: Some(Duration::from_millis(10).as_millis() as i64),
-        }),
-    });
+    handle_turn_started(&mut chat, "turn-1");
+    chat.set_status_header("Tracing render path".to_string());
+    handle_turn_completed(&mut chat, "turn-1", Some(10));
 
     assert_eq!(chat.live_stage_summary, None);
     assert_eq!(
