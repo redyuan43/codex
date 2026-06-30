@@ -8,4 +8,4 @@ import type { HookOutputEntry } from "./HookOutputEntry";
 import type { HookRunStatus } from "./HookRunStatus";
 import type { HookScope } from "./HookScope";
 
-export type HookRunSummary = { id: string, eventName: HookEventName, handlerType: HookHandlerType, executionMode: HookExecutionMode, scope: HookScope, sourcePath: string, displayOrder: bigint, status: HookRunStatus, statusMessage: string | null, startedAt: bigint, completedAt: bigint | null, durationMs: bigint | null, entries: Array<HookOutputEntry>, };
+export type HookRunSummary = { id: string, eventName: HookEventName, handlerType: HookHandlerType, executionMode: HookExecutionMode, scope: HookScope, sourcePath: string, displayOrder: bigint, status: HookRunStatus, statusMessage: string | null, summaryInput: string | null, startedAt: bigint, completedAt: bigint | null, durationMs: bigint | null, entries: Array<HookOutputEntry>, };

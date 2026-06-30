@@ -1309,6 +1309,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                summary_input: None,
                 started_at: 1,
                 completed_at: None,
                 duration_ms: None,
@@ -1331,6 +1332,7 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
                 display_order: 0,
                 status: AppServerHookRunStatus::Stopped,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                summary_input: None,
                 started_at: 1,
                 completed_at: Some(11),
                 duration_ms: Some(10),
@@ -1357,6 +1359,45 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
     assert_chatwidget_snapshot!(
         "user_prompt_submit_app_server_hook_notifications_render_snapshot",
         combined
+    );
+    let composer = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        composer.contains("prompt blocked") && !composer.contains("Ask Codex to do anything"),
+        "expected hook summary in composer placeholder: {composer}"
+    );
+}
+
+#[tokio::test]
+async fn completed_empty_hook_does_not_set_composer_summary() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "hook-1".into(),
+        msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
+            turn_id: Some("turn-1".to_string()),
+            run: codex_protocol::protocol::HookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                handler_type: codex_protocol::protocol::HookHandlerType::Command,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+                scope: codex_protocol::protocol::HookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: codex_protocol::protocol::HookRunStatus::Completed,
+                status_message: Some("ok".to_string()),
+                summary_input: None,
+                started_at: 1,
+                completed_at: Some(2),
+                duration_ms: Some(1),
+                entries: Vec::new(),
+            },
+        }),
+    });
+
+    let composer = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        !composer.contains("摘要："),
+        "empty successful hook should not set a composer summary: {composer}"
     );
 }
 

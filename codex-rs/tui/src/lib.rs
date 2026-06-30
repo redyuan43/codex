@@ -122,6 +122,7 @@ pub use insert_history::insert_history_lines;
 mod key_hint;
 mod line_truncation;
 pub(crate) mod live_wrap;
+mod loop_scheduler;
 pub use live_wrap::RowBuilder;
 mod local_chatgpt_auth;
 mod markdown;

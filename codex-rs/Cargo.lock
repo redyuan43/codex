@@ -213,7 +213,7 @@ dependencies = [
  "lazy_static",
  "nom 7.1.3",
  "pin-project",
- "rand 0.8.5",
+ "rand 0.8.6",
  "rust-embed",
  "scrypt",
  "sha2",
@@ -234,7 +234,7 @@ dependencies = [
  "hkdf",
  "io_tee",
  "nom 7.1.3",
- "rand 0.8.5",
+ "rand 0.8.6",
  "secrecy",
  "sha2",
 ]
@@ -396,13 +396,13 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.101"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "app_test_support"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -449,7 +449,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "codex-analytics"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-app-server-protocol",
  "codex-git-utils",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "codex-ansi-escape"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "ansi-to-tui",
  "ratatui",
@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "codex-api"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "app_test_support",
@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-app-server",
  "codex-app-server-protocol",
@@ -1531,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-protocol"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app-server-test-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "codex-apply-patch"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "codex-arg0"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "codex-async-utils"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "async-trait",
  "pretty_assertions",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-backend-openapi-models",
@@ -1641,7 +1641,7 @@ dependencies = [
 
 [[package]]
 name = "codex-backend-openapi-models"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -1650,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "codex-chatgpt"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1670,7 +1670,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1722,7 +1722,7 @@ dependencies = [
 
 [[package]]
 name = "codex-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1734,7 +1734,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
- "rand 0.9.2",
+ "rand 0.9.4",
  "reqwest",
  "rustls",
  "rustls-native-certs",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-requirements"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1777,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cloud-tasks-mock-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1833,7 +1833,7 @@ dependencies = [
 
 [[package]]
 name = "codex-code-mode"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "async-trait",
  "pretty_assertions",
@@ -1847,11 +1847,11 @@ dependencies = [
 
 [[package]]
 name = "codex-collaboration-mode-templates"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 
 [[package]]
 name = "codex-config"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-app-server-protocol",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "codex-connectors"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-app-server-protocol",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1979,7 +1979,7 @@ dependencies = [
  "opentelemetry_sdk",
  "predicates",
  "pretty_assertions",
- "rand 0.9.2",
+ "rand 0.9.4",
  "regex-lite",
  "reqwest",
  "rmcp",
@@ -2016,7 +2016,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core-skills"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-analytics",
@@ -2045,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "codex-debug-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -2057,7 +2057,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec-server"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2127,7 +2127,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy-legacy"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "allocative",
  "anyhow",
@@ -2164,7 +2164,7 @@ dependencies = [
 
 [[package]]
 name = "codex-experimental-api-macros"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2173,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "codex-features"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-otel",
  "codex-protocol",
@@ -2186,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "codex-feedback"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-login",
@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "codex-file-search"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -2215,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "codex-git-utils"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "assert_matches",
  "codex-utils-absolute-path",
@@ -2234,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "codex-hooks"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2252,7 +2252,7 @@ dependencies = [
 
 [[package]]
 name = "codex-instructions"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-protocol",
  "pretty_assertions",
@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "codex-keyring-store"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "keyring",
  "tracing",
@@ -2269,7 +2269,7 @@ dependencies = [
 
 [[package]]
 name = "codex-linux-sandbox"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "cc",
  "clap",
@@ -2292,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "codex-llamacpp"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-core",
  "codex-model-provider-info",
@@ -2305,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "codex-lmstudio"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-core",
  "codex-model-provider-info",
@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "codex-login"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2340,7 +2340,7 @@ dependencies = [
  "once_cell",
  "os_info",
  "pretty_assertions",
- "rand 0.9.2",
+ "rand 0.9.4",
  "regex-lite",
  "reqwest",
  "serde",
@@ -2360,7 +2360,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-server"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-arg0",
@@ -2421,7 +2421,7 @@ dependencies = [
 
 [[package]]
 name = "codex-model-provider-info"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-api",
  "codex-app-server-protocol",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "codex-models-manager"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "codex-network-proxy"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "codex-ollama"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "assert_matches",
  "async-stream",
@@ -2519,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "codex-otel"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "chrono",
  "codex-api",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "codex-plugin"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-plugins",
@@ -2560,7 +2560,7 @@ dependencies = [
 
 [[package]]
 name = "codex-process-hardening"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "libc",
  "pretty_assertions",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "chardetng",
@@ -2608,7 +2608,7 @@ dependencies = [
 
 [[package]]
 name = "codex-realtime-webrtc"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "libwebrtc",
  "thiserror 2.0.18",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "codex-response-debug-context"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "base64 0.22.1",
  "codex-api",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "codex-responses-api-proxy"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "codex-rmcp-client"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -2679,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "codex-rollout"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2704,7 +2704,7 @@ dependencies = [
 
 [[package]]
 name = "codex-sandboxing"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-network-proxy",
  "codex-protocol",
@@ -2721,7 +2721,7 @@ dependencies = [
 
 [[package]]
 name = "codex-secrets"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "age",
  "anyhow",
@@ -2730,7 +2730,7 @@ dependencies = [
  "codex-keyring-store",
  "keyring",
  "pretty_assertions",
- "rand 0.9.2",
+ "rand 0.9.4",
  "regex",
  "schemars 0.8.22",
  "serde",
@@ -2742,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "codex-shell-command"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2762,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "codex-shell-escalation"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2783,7 +2783,7 @@ dependencies = [
 
 [[package]]
 name = "codex-skills"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-utils-absolute-path",
  "include_dir",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "codex-state"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2815,7 +2815,7 @@ dependencies = [
 
 [[package]]
 name = "codex-stdio-to-uds"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-utils-cargo-bin",
@@ -2826,7 +2826,7 @@ dependencies = [
 
 [[package]]
 name = "codex-terminal-detection"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "pretty_assertions",
  "tracing",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tools"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-app-server-protocol",
  "codex-code-mode",
@@ -2851,7 +2851,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2911,7 +2911,7 @@ dependencies = [
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",
- "rand 0.9.2",
+ "rand 0.9.4",
  "ratatui",
  "ratatui-macros",
  "regex-lite",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-absolute-path"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "dirs",
  "pretty_assertions",
@@ -2963,14 +2963,14 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-approval-presets"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-protocol",
 ]
 
 [[package]]
 name = "codex-utils-cache"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "lru 0.16.3",
  "sha1",
@@ -2979,7 +2979,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cargo-bin"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "assert_cmd",
  "runfiles",
@@ -2988,7 +2988,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-cli"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "clap",
  "codex-protocol",
@@ -2999,15 +2999,15 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-elapsed"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 
 [[package]]
 name = "codex-utils-fuzzy-match"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 
 [[package]]
 name = "codex-utils-home-dir"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "dirs",
  "pretty_assertions",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-image"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
@@ -3028,7 +3028,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-json-to-toml"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "pretty_assertions",
  "serde_json",
@@ -3037,7 +3037,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-oss"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-core",
  "codex-llamacpp",
@@ -3048,7 +3048,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-output-truncation"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-protocol",
  "codex-utils-string",
@@ -3057,7 +3057,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-path"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-utils-absolute-path",
  "dunce",
@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-plugins"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-login",
  "serde",
@@ -3077,7 +3077,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-pty"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "filedescriptor",
@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-readiness"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -3104,14 +3104,14 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-rustls-provider"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "rustls",
 ]
 
 [[package]]
 name = "codex-utils-sandbox-summary"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "codex-core",
  "codex-model-provider-info",
@@ -3122,7 +3122,7 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-sleep-inhibitor"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "core-foundation 0.9.4",
  "libc",
@@ -3132,14 +3132,14 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-stream-parser"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "pretty_assertions",
 ]
 
 [[package]]
 name = "codex-utils-string"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
@@ -3147,14 +3147,14 @@ dependencies = [
 
 [[package]]
 name = "codex-utils-template"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "pretty_assertions",
 ]
 
 [[package]]
 name = "codex-v8-poc"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "pretty_assertions",
  "v8",
@@ -3162,7 +3162,7 @@ dependencies = [
 
 [[package]]
 name = "codex-windows-sandbox"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3174,7 +3174,7 @@ dependencies = [
  "dirs-next",
  "dunce",
  "pretty_assertions",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "tempfile",
@@ -3382,7 +3382,7 @@ dependencies = [
 
 [[package]]
 name = "core_test_support"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4110,7 +4110,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4355,7 +4355,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4916,7 +4916,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5143,7 +5143,7 @@ dependencies = [
  "idna",
  "ipnet",
  "once_cell",
- "rand 0.9.2",
+ "rand 0.9.4",
  "ring",
  "thiserror 2.0.18",
  "tinyvec",
@@ -5165,7 +5165,7 @@ dependencies = [
  "moka",
  "once_cell",
  "parking_lot",
- "rand 0.9.2",
+ "rand 0.9.4",
  "resolv-conf",
  "smallvec",
  "thiserror 2.0.18",
@@ -5360,7 +5360,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5866,7 +5866,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6418,7 +6418,7 @@ checksum = "b3eede3bdf92f3b4f9dc04072a9ce5ab557d5ec9038773bf9ffcd5588b3cc05b"
 
 [[package]]
 name = "mcp_test_support"
-version = "0.0.0"
+version = "0.142.4-siyuan.6"
 dependencies = [
  "anyhow",
  "codex-login",
@@ -6712,7 +6712,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6769,7 +6769,7 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "rand 0.8.5",
+ "rand 0.8.6",
  "smallvec",
  "zeroize",
 ]
@@ -6892,7 +6892,7 @@ dependencies = [
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
- "rand 0.8.5",
+ "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",
@@ -7311,7 +7311,7 @@ dependencies = [
  "futures-util",
  "opentelemetry",
  "percent-encoding",
- "rand 0.9.2",
+ "rand 0.9.4",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -7356,7 +7356,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -7878,7 +7878,7 @@ checksum = "bee689443a2bd0a16ab0348b52ee43e3b2d1b1f931c8aa5c9f8de4c86fbe8c40"
 dependencies = [
  "bitflags 2.10.0",
  "num-traits",
- "rand 0.9.2",
+ "rand 0.9.4",
  "rand_chacha 0.9.0",
  "rand_xorshift",
  "regex-syntax 0.8.8",
@@ -7912,7 +7912,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22505a5c94da8e3b7c2996394d1c933236c4d743e81a410bcca4e6989fc066a4"
 dependencies = [
  "bytes",
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.11.0",
  "log",
  "multimap",
@@ -8033,7 +8033,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -8049,7 +8049,7 @@ dependencies = [
  "bytes",
  "getrandom 0.3.4",
  "lru-slab",
- "rand 0.9.2",
+ "rand 0.9.4",
  "ring",
  "rustc-hash 2.1.1",
  "rustls",
@@ -8070,9 +8070,9 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8181,7 +8181,7 @@ dependencies = [
  "rama-http-types",
  "rama-net",
  "rama-utils",
- "rand 0.9.2",
+ "rand 0.9.4",
  "serde",
  "serde_html_form",
  "serde_json",
@@ -8251,7 +8251,7 @@ dependencies = [
  "rama-macros",
  "rama-net",
  "rama-utils",
- "rand 0.9.2",
+ "rand 0.9.4",
  "serde",
  "sha1",
 ]
@@ -8279,7 +8279,7 @@ dependencies = [
  "rama-error",
  "rama-macros",
  "rama-utils",
- "rand 0.9.2",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "sync_wrapper",
@@ -8353,7 +8353,7 @@ dependencies = [
  "rama-http-types",
  "rama-net",
  "rama-utils",
- "rand 0.9.2",
+ "rand 0.9.4",
  "tokio",
 ]
 
@@ -8422,9 +8422,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -8433,9 +8433,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.2"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
+checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.5",
@@ -8750,7 +8750,7 @@ dependencies = [
  "pastey",
  "pin-project-lite",
  "process-wrap",
- "rand 0.9.2",
+ "rand 0.9.4",
  "reqwest",
  "rmcp-macros",
  "schemars 1.2.1",
@@ -8927,7 +8927,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8970,9 +8970,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -9220,7 +9220,7 @@ dependencies = [
  "hkdf",
  "num",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "sha2",
  "zbus",
@@ -9347,7 +9347,7 @@ version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26ab054c34b87f96c3e4701bea1888317cde30cc7e4a6136d2c48454ab96661c"
 dependencies = [
- "rand 0.9.2",
+ "rand 0.9.4",
  "sentry-types",
  "serde",
  "serde_json",
@@ -9395,7 +9395,7 @@ checksum = "eecbd63e9d15a26a40675ed180d376fcb434635d2e33de1c24003f61e3e2230d"
 dependencies = [
  "debugid",
  "hex",
- "rand 0.9.2",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -9922,7 +9922,7 @@ dependencies = [
  "memchr",
  "once_cell",
  "percent-encoding",
- "rand 0.8.5",
+ "rand 0.8.6",
  "rsa",
  "serde",
  "sha1",
@@ -9963,7 +9963,7 @@ dependencies = [
  "md-5",
  "memchr",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "sha2",
@@ -10386,7 +10386,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11180,7 +11180,7 @@ dependencies = [
  "http 1.4.0",
  "httparse",
  "log",
- "rand 0.9.2",
+ "rand 0.9.4",
  "rustls",
  "rustls-pki-types",
  "sha1",
@@ -11867,7 +11867,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -12627,7 +12627,7 @@ dependencies = [
  "hex",
  "nix 0.29.0",
  "ordered-stream",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "serde_repr",
  "sha1",

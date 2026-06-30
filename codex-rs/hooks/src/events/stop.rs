@@ -109,9 +109,20 @@ pub(crate) async fn run(
     .await;
 
     let aggregate = aggregate_results(results.iter().map(|result| &result.data));
+    let summary_input = request
+        .last_assistant_message
+        .as_deref()
+        .and_then(common::trimmed_non_empty);
+    let hook_events = results
+        .into_iter()
+        .map(|mut result| {
+            result.completed.run.summary_input = summary_input.clone();
+            result.completed
+        })
+        .collect();
 
     StopOutcome {
-        hook_events: results.into_iter().map(|result| result.completed).collect(),
+        hook_events,
         should_stop: aggregate.should_stop,
         stop_reason: aggregate.stop_reason,
         should_block: aggregate.should_block,

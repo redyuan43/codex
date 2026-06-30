@@ -341,6 +341,13 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
+    /// Persist model selection and show a caller-provided success message.
+    PersistModelSelectionWithMessage {
+        model: String,
+        effort: Option<ReasoningEffort>,
+        message: String,
+    },
+
     /// Persist the selected personality to the appropriate config.
     PersistPersonalitySelection {
         personality: Personality,
@@ -561,6 +568,11 @@ pub(crate) enum AppEvent {
     SubmitUserMessageWithMode {
         text: String,
         collaboration_mode: CollaborationModeMask,
+    },
+
+    /// Submit a user message from an app-level source such as a scheduled loop.
+    SubmitUserMessage {
+        text: String,
     },
 
     /// Clear the UI, start a fresh session, and implement from a persisted plan file.

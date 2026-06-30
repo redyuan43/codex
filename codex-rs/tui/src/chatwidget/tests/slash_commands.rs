@@ -1,5 +1,100 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+
+fn set_model_shortcut_catalog(chat: &mut ChatWidget) {
+    let models: Vec<ModelPreset> = ModelsResponse {
+        models: vec![
+            shortcut_model_info(
+                "strong-model",
+                /*priority*/ 0,
+                vec![ReasoningEffortConfig::High],
+                ReasoningEffortConfig::High,
+            ),
+            shortcut_model_info(
+                "balanced-model",
+                /*priority*/ 1,
+                vec![
+                    ReasoningEffortConfig::Low,
+                    ReasoningEffortConfig::Medium,
+                    ReasoningEffortConfig::High,
+                ],
+                ReasoningEffortConfig::Medium,
+            ),
+            shortcut_model_info(
+                "cheap-model",
+                /*priority*/ 2,
+                vec![ReasoningEffortConfig::Low],
+                ReasoningEffortConfig::Low,
+            ),
+        ],
+    }
+    .models
+    .into_iter()
+    .map(Into::into)
+    .collect();
+
+    chat.model_catalog = Arc::new(ModelCatalog::new(
+        models,
+        CollaborationModesConfig {
+            default_mode_request_user_input: chat
+                .config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        },
+    ));
+}
+
+fn shortcut_model_info(
+    slug: &str,
+    priority: i32,
+    supported_efforts: Vec<ReasoningEffortConfig>,
+    default_effort: ReasoningEffortConfig,
+) -> ModelInfo {
+    let supported_reasoning_levels = supported_efforts
+        .into_iter()
+        .map(|effort| {
+            json!({
+                "effort": effort,
+                "description": effort.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::from_value(json!({
+        "slug": slug,
+        "display_name": slug,
+        "description": format!("{slug} description"),
+        "default_reasoning_level": default_effort,
+        "supported_reasoning_levels": supported_reasoning_levels,
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": priority,
+        "additional_speed_tiers": [],
+        "availability_nux": null,
+        "upgrade": null,
+        "base_instructions": "base instructions",
+        "supports_reasoning_summaries": false,
+        "default_reasoning_summary": "none",
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10_000},
+        "supports_parallel_tool_calls": false,
+        "supports_image_detail_original": false,
+        "context_window": 272_000,
+        "experimental_supported_tools": [],
+    }))
+    .expect("valid model info")
+}
+
+fn drain_app_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<AppEvent> {
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    events
+}
 
 #[tokio::test]
 async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
@@ -106,29 +201,91 @@ async fn slash_loop_opens_thread_alarms_for_active_thread() {
 }
 
 #[tokio::test]
-async fn slash_loop_with_args_requests_alarm_spec_parse() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_feature_enabled(Feature::AlarmScheduler, true);
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
+async fn slash_loop_with_args_schedules_prompt_loop() {
+    crate::loop_scheduler::stop_all_loops();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.bottom_pane.set_composer_text(
-        "/loop every 5 minutes review the repo".to_string(),
+        "/loop every 5m review the repo".to_string(),
         Vec::new(),
         Vec::new(),
     );
 
     chat.dispatch_command_with_args(
         SlashCommand::Loop,
-        "every 5 minutes review the repo".to_string(),
+        "every 5m review the repo".to_string(),
         Vec::new(),
     );
 
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::CreateThreadAlarmFromSpec {
-            thread_id: event_thread_id,
-            spec
-        }) if event_thread_id == thread_id && spec == "every 5 minutes review the repo"
+    let descriptions = crate::loop_scheduler::active_loop_descriptions();
+    assert_eq!(descriptions.len(), 1);
+    assert!(
+        descriptions[0].contains("every 5m: review the repo"),
+        "unexpected description: {}",
+        descriptions[0]
+    );
+    crate::loop_scheduler::stop_all_loops();
+}
+
+#[tokio::test]
+async fn slash_think_more_raises_and_persists_reasoning_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("balanced-model")).await;
+    set_model_shortcut_catalog(&mut chat);
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_model("balanced-model");
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    drain_app_events(&mut rx);
+
+    chat.dispatch_command(SlashCommand::ThinkMore);
+
+    let events = drain_app_events(&mut rx);
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High))
+        )),
+        "expected reasoning effort update, got {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                message,
+            } if model == "balanced-model" && message == "模型现在有变强了。"
+        )),
+        "expected persisted shortcut selection, got {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_model_down_switches_to_next_cheaper_model() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("strong-model")).await;
+    set_model_shortcut_catalog(&mut chat);
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_model("strong-model");
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    drain_app_events(&mut rx);
+
+    chat.dispatch_command(SlashCommand::ModelDown);
+
+    let events = drain_app_events(&mut rx);
+    assert!(
+        events.iter().any(
+            |event| matches!(event, AppEvent::UpdateModel(model) if model == "balanced-model")
+        ),
+        "expected model update, got {events:?}"
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                message,
+            } if model == "balanced-model" && message == "模型现在级别变低了。"
+        )),
+        "expected persisted model shortcut, got {events:?}"
     );
 }
 #[tokio::test]

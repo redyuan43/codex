@@ -52,6 +52,101 @@ Run `just fmt` (in `codex-rs` directory) automatically after you have finished m
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
+## 本机 siyuan / 本地 Codex debug 入口经验
+
+目标：让用户输入 `siyuan` 时启动本仓库刚编译出的 Codex debug 二进制，而不是系统里已有的 `/home/ivan/.local/bin/siyuan`。
+
+当前验证过的入口：
+
+```bash
+/home/ivan/github/codex/codex-rs/target/debug/codex
+```
+
+`~/.bashrc` 中应保留这些 alias：
+
+```bash
+alias codex='/home/ivan/github/codex/codex-rs/target/debug/codex'
+alias local_codex='/home/ivan/github/codex/codex-rs/target/debug/codex'
+alias siyuan='/home/ivan/github/codex/codex-rs/target/debug/codex'
+```
+
+验证命令：
+
+```bash
+bash -ic 'type siyuan; siyuan --version'
+```
+
+期望看到：
+
+```text
+siyuan is aliased to `/home/ivan/github/codex/codex-rs/target/debug/codex'
+codex-cli 0.142.4-siyuan.6
+```
+
+注意点：
+
+- 新终端会自动读取 `~/.bashrc`；当前终端需要 `source ~/.bashrc`。
+- `type -a siyuan` 可能仍列出 `/home/ivan/.local/bin/siyuan`，但交互式 bash 中 alias 优先级更高。
+- `which siyuan` 不一定显示 alias；排查时优先用 `type siyuan`。
+
+### 本地 siyuan 公告 Tip
+
+用户希望启动 Tip 显示：
+
+```text
+Tip: 当前是B.U.S.Corp公司的siyuan模型0.142.4-siyuan.6 Version, Provider: 冯源
+```
+
+显示层会自动加 `Tip: ` 前缀，因此 `announcement_tip.toml` 里的 `content` 只写正文：
+
+```toml
+content = "当前是B.U.S.Corp公司的siyuan模型{version} Version, Provider: 冯源"
+```
+
+踩坑：`codex-rs/tui/src/tooltips.rs` 默认从 GitHub raw URL 拉取 `announcement_tip.toml`，只改仓库根目录 TOML 可能仍显示远端旧 Tip。为了让本地构建稳定显示本地文案，需要：
+
+- 在 `codex-rs/tui/src/tooltips.rs` 中用 `include_str!("../../../announcement_tip.toml")` 把根目录 TOML 编进二进制，并优先使用本地内容。
+- 在根 `BUILD.bazel` 的 `exports_files` 中导出 `announcement_tip.toml`。
+- 在 `codex-rs/tui/BUILD.bazel` 的 `compile_data` 中加入 `//:announcement_tip.toml`，避免 Bazel 构建时找不到 `include_str!` 依赖。
+
+修改后验证：
+
+```bash
+cargo test -p codex-tui announcement_tip_toml_parse_comments
+cargo build -p codex-cli
+strings /home/ivan/github/codex/codex-rs/target/debug/codex | rg 'B\.U\.S\.Corp|This is a test announcement'
+```
+
+期望新文案存在，旧 `"This is a test announcement"` 不应再出现在新二进制的公告内容里。
+
+### 去掉启动信息框
+
+截图中的启动信息框来自 `codex-rs/tui/src/history_cell/session.rs` 的 `SessionHeaderHistoryCell`，内容包括：
+
+```text
+>_ OpenAI Codex
+model:
+directory:
+permissions: YOLO mode
+```
+
+要隐藏它，保持 `SessionHeaderHistoryCell` 返回空 `display_lines()` 和空 `raw_lines()`。同时更新相关 snapshot，使 `/clear` 和 Ctrl-L 重画 header 时也为空输出。
+
+相关验证：
+
+```bash
+cargo test -p codex-tui session_header
+cargo test -p codex-tui clear_ui_header
+cargo test -p codex-tui clear_ui_after_long_transcript_snapshots_fresh_header_only
+cargo test -p codex-tui ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot
+cargo build -p codex-cli
+```
+
+已遇到的本机验证问题：
+
+- `just fmt` 在 Rust 格式化后会继续跑 Python SDK `ruff`，当前 Linux manylinux 环境可能因 `openai-codex-cli-bin==0.131.0a4` 缺 wheel 失败；可补跑 `cargo fmt -- --config imports_granularity=Item`，stable rustfmt 对该配置会输出 warning 但退出码可为 0。
+- 完整 `cargo test -p codex-tui` 曾在无关测试 `discard_side_thread_keeps_local_state_when_server_close_fails` 处 stack overflow abort；针对本次 TUI header/tooltip 改动可先跑上面的聚焦测试。
+
 ## The `codex-core` crate
 
 Over time, the `codex-core` crate (defined in `codex-rs/core/`) has become bloated because it is the largest crate, so it is often easier to add something new to `codex-core` rather than refactor out the library code you need so your new code neither takes a dependency on, nor contributes to the size of, `codex-core`.

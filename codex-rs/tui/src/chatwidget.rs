@@ -263,6 +263,51 @@ const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
+const LOOP_USAGE: &str = "Usage: /loop <duration> <prompt>, /loop every <duration> <prompt>, /loop list, or /loop stop [id]";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReasoningShortcutDirection {
+    Lower,
+    Raise,
+}
+
+impl ReasoningShortcutDirection {
+    fn bound_message(self) -> String {
+        match self {
+            Self::Lower => "推理现在已经是最弱了。".to_string(),
+            Self::Raise => "推理现在已经是最强了。".to_string(),
+        }
+    }
+
+    fn changed_message(self) -> String {
+        match self {
+            Self::Lower => "模型现在变弱了。".to_string(),
+            Self::Raise => "模型现在有变强了。".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelShortcutDirection {
+    Cheaper,
+    Stronger,
+}
+
+impl ModelShortcutDirection {
+    fn bound_message(self) -> String {
+        match self {
+            Self::Cheaper => "模型现在已经是最低级别了。".to_string(),
+            Self::Stronger => "模型现在已经是最高级别了。".to_string(),
+        }
+    }
+
+    fn changed_message(self) -> String {
+        match self {
+            Self::Cheaper => "模型现在级别变低了。".to_string(),
+            Self::Stronger => "模型现在级别变高了。".to_string(),
+        }
+    }
+}
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -1337,6 +1382,7 @@ fn hook_run_summary_from_notification(
         display_order: run.display_order,
         status: run.status.to_core(),
         status_message: run.status_message,
+        summary_input: run.summary_input,
         started_at: run.started_at,
         completed_at: run.completed_at,
         duration_ms: run.duration_ms,
@@ -4188,6 +4234,16 @@ impl ChatWidget {
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
+        let has_summary_source = event
+            .run
+            .summary_input
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || !event.run.entries.is_empty()
+            || event.run.status != codex_protocol::protocol::HookRunStatus::Completed;
+        let summary = has_summary_source
+            .then(|| history_cell::summarize_hook_run(&event.run))
+            .flatten();
         let status = format!("{:?}", event.run.status).to_lowercase();
         let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
         let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
@@ -4202,6 +4258,10 @@ impl ChatWidget {
             lines.push(format!("  {prefix}{}", entry.text).into());
         }
         self.add_to_history(PlainHistoryCell::new(lines));
+        if let Some(summary) = summary {
+            self.bottom_pane
+                .set_live_placeholder_summary(Some(format!("摘要：{summary}")));
+        }
         self.request_redraw();
     }
 
@@ -5316,7 +5376,10 @@ impl ChatWidget {
             }
             SlashCommand::Loop => {
                 let Some(thread_id) = self.thread_id else {
-                    self.add_error_message("No active thread is available.".to_string());
+                    self.add_info_message(
+                        LOOP_USAGE.to_string(),
+                        Some("Start a session first to open thread alarms.".to_string()),
+                    );
                     return;
                 };
                 self.app_event_tx
@@ -5329,6 +5392,18 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::ThinkMore => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Raise);
+            }
+            SlashCommand::ThinkLess => {
+                self.handle_reasoning_slash_command(ReasoningShortcutDirection::Lower);
+            }
+            SlashCommand::ModelUp => {
+                self.handle_model_slash_command(ModelShortcutDirection::Stronger);
+            }
+            SlashCommand::ModelDown => {
+                self.handle_model_slash_command(ModelShortcutDirection::Cheaper);
             }
             SlashCommand::Fast => {
                 let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
@@ -5707,20 +5782,64 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Loop if !trimmed.is_empty() => {
-                let Some(thread_id) = self.thread_id else {
-                    self.add_error_message("No active thread is available.".to_string());
-                    return;
-                };
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
-                else {
-                    return;
-                };
-                self.app_event_tx.send(AppEvent::CreateThreadAlarmFromSpec {
-                    thread_id,
-                    spec: prepared_args,
-                });
+                if matches!(trimmed, "list" | "ls") {
+                    let descriptions = crate::loop_scheduler::active_loop_descriptions();
+                    if descriptions.is_empty() {
+                        self.add_info_message(
+                            "No active /loop tasks.".to_string(),
+                            /*hint*/ None,
+                        );
+                    } else {
+                        self.add_info_message(
+                            format!("Active /loop tasks: {}", descriptions.join(", ")),
+                            /*hint*/ None,
+                        );
+                    }
+                } else if trimmed == "stop" {
+                    let ids = crate::loop_scheduler::stop_all_loops();
+                    let message = if ids.is_empty() {
+                        "Stopped 0 active /loop tasks.".to_string()
+                    } else {
+                        let ids = ids
+                            .iter()
+                            .map(|id| format!("#{id}"))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("Stopped active /loop task(s): {ids}.")
+                    };
+                    self.add_info_message(message, /*hint*/ None);
+                } else if let Some(loop_id) = trimmed.strip_prefix("stop ") {
+                    match crate::loop_scheduler::parse_loop_id(loop_id) {
+                        Ok(loop_id) => {
+                            if crate::loop_scheduler::stop_loop(loop_id) {
+                                self.add_info_message(
+                                    format!("Stopped /loop #{loop_id}."),
+                                    /*hint*/ None,
+                                );
+                            } else {
+                                self.add_error_message(format!("No active /loop #{loop_id}."));
+                            }
+                        }
+                        Err(err) => self.add_error_message(err),
+                    }
+                } else {
+                    match crate::loop_scheduler::parse_loop_spec(trimmed) {
+                        Ok(spec) => {
+                            let id = crate::loop_scheduler::schedule_loop(
+                                spec.clone(),
+                                self.app_event_tx.clone(),
+                            );
+                            self.add_info_message(
+                                crate::loop_scheduler::loop_scheduled_message(id, &spec),
+                                Some(
+                                    "This /loop runs while the current TUI process is alive."
+                                        .to_string(),
+                                ),
+                            );
+                        }
+                        Err(err) => self.add_error_message(err),
+                    }
+                }
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Review if !trimmed.is_empty() => {
@@ -5841,6 +5960,10 @@ impl ChatWidget {
         } else {
             self.submit_user_message(user_message);
         }
+    }
+
+    pub(crate) fn submit_or_queue_user_message(&mut self, user_message: UserMessage) {
+        self.queue_user_message(user_message);
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -8816,6 +8939,119 @@ impl ChatWidget {
             .send(AppEvent::PersistModelSelection { model, effort });
     }
 
+    fn apply_model_and_effort_for_all_modes_with_message(
+        &self,
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
+        message: String,
+    ) {
+        self.apply_model_and_effort_without_persist(model.clone(), effort);
+        if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
+            self.app_event_tx
+                .send(AppEvent::UpdatePlanModeReasoningEffort(effort));
+            self.app_event_tx
+                .send(AppEvent::PersistPlanModeReasoningEffort(effort));
+        }
+        self.app_event_tx
+            .send(AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort,
+                message,
+            });
+    }
+
+    fn handle_reasoning_slash_command(&mut self, direction: ReasoningShortcutDirection) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Reasoning shortcuts are disabled until startup completes.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let current_model = self.current_model().to_string();
+        let Some(preset) = self.current_model_preset() else {
+            self.add_info_message(
+                format!("Reasoning shortcuts are unavailable for {current_model}."),
+                /*hint*/ None,
+            );
+            return;
+        };
+
+        let choices = reasoning_choices(&preset);
+        let current_effort = self
+            .effective_reasoning_effort()
+            .unwrap_or(preset.default_reasoning_effort);
+        let Some(next_effort) = next_reasoning_effort(&choices, current_effort, direction) else {
+            self.add_info_message(direction.bound_message(), /*hint*/ None);
+            return;
+        };
+
+        self.apply_model_and_effort_for_all_modes_with_message(
+            current_model,
+            Some(next_effort),
+            direction.changed_message(),
+        );
+    }
+
+    fn handle_model_slash_command(&mut self, direction: ModelShortcutDirection) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Model shortcuts are disabled until startup completes.".to_string(),
+                /*hint*/ None,
+            );
+            return;
+        }
+
+        let presets = match self.model_catalog.try_list_models() {
+            Ok(models) => concrete_model_presets(models),
+            Err(_) => {
+                self.add_info_message(
+                    "Models are being updated; please try again in a moment.".to_string(),
+                    /*hint*/ None,
+                );
+                return;
+            }
+        };
+        let current_model = self.current_model().to_string();
+        let Some(current_idx) = presets
+            .iter()
+            .position(|preset| preset.model == current_model)
+        else {
+            self.add_info_message(
+                format!("Model shortcuts are unavailable for {current_model}."),
+                /*hint*/ None,
+            );
+            return;
+        };
+        let Some(next_idx) = next_model_index(&presets, current_idx, direction) else {
+            self.add_info_message(direction.bound_message(), /*hint*/ None);
+            return;
+        };
+
+        let next_preset = &presets[next_idx];
+        let requested_effort = self.effective_reasoning_effort().or_else(|| {
+            self.current_model_preset()
+                .map(|preset| preset.default_reasoning_effort)
+        });
+        let next_effort = nearest_supported_effort(next_preset, requested_effort)
+            .or(Some(next_preset.default_reasoning_effort));
+        self.apply_model_and_effort_for_all_modes_with_message(
+            next_preset.model.clone(),
+            next_effort,
+            direction.changed_message(),
+        );
+    }
+
+    fn current_model_preset(&self) -> Option<ModelPreset> {
+        let current_model = self.current_model();
+        self.model_catalog
+            .try_list_models()
+            .ok()?
+            .into_iter()
+            .find(|preset| preset.model == current_model)
+    }
+
     /// Open the permissions popup (alias for /permissions).
     pub(crate) fn open_approvals_popup(&mut self) {
         self.open_permissions_popup();
@@ -10162,23 +10398,13 @@ impl ChatWidget {
         if previous_mode != next_mode
             && (previous_model != next_model || previous_effort != next_effort)
         {
-            let mut message = format!("Model changed to {next_model}");
-            if !next_model.starts_with("codex-auto-") {
-                let reasoning_label = match next_effort {
-                    Some(ReasoningEffortConfig::Minimal) => "minimal",
-                    Some(ReasoningEffortConfig::Low) => "low",
-                    Some(ReasoningEffortConfig::Medium) => "medium",
-                    Some(ReasoningEffortConfig::High) => "high",
-                    Some(ReasoningEffortConfig::XHigh) => "xhigh",
-                    None | Some(ReasoningEffortConfig::None) => "default",
-                };
-                message.push(' ');
-                message.push_str(reasoning_label);
-            }
-            message.push_str(" for ");
-            message.push_str(next_mode.display_name());
-            message.push_str(" mode.");
-            self.add_info_message(message, /*hint*/ None);
+            let message = match next_mode {
+                ModeKind::Plan => "模型切换成深度思考模式.",
+                ModeKind::Default => "模型切换成默认模式.",
+                ModeKind::PairProgramming => "模型切换成结对编程模式.",
+                ModeKind::Execute => "模型切换成执行模式.",
+            };
+            self.add_info_message(message.to_string(), /*hint*/ None);
         }
         self.request_redraw();
     }
@@ -11556,6 +11782,94 @@ fn summarize_mcp_progress(invocation: &McpInvocation) -> Option<String> {
     let server = normalize_summary_line(&invocation.server)?;
     let tool = normalize_summary_line(&invocation.tool)?;
     Some(format!("Completed {server}/{tool}"))
+}
+
+fn concrete_model_presets(models: Vec<ModelPreset>) -> Vec<ModelPreset> {
+    models
+        .into_iter()
+        .filter(|preset| preset.show_in_picker && !ChatWidget::is_auto_model(&preset.model))
+        .collect()
+}
+
+fn next_model_index(
+    presets: &[ModelPreset],
+    current_idx: usize,
+    direction: ModelShortcutDirection,
+) -> Option<usize> {
+    match direction {
+        ModelShortcutDirection::Cheaper => current_idx
+            .checked_add(1)
+            .filter(|idx| *idx < presets.len()),
+        ModelShortcutDirection::Stronger => current_idx.checked_sub(1),
+    }
+}
+
+fn reasoning_choices(preset: &ModelPreset) -> Vec<ReasoningEffortConfig> {
+    let mut choices = Vec::new();
+    for effort in ReasoningEffortConfig::iter() {
+        if preset
+            .supported_reasoning_efforts
+            .iter()
+            .any(|option| option.effort == effort)
+        {
+            choices.push(effort);
+        }
+    }
+    if choices.is_empty() {
+        choices.push(preset.default_reasoning_effort);
+    }
+    choices
+}
+
+fn next_reasoning_effort(
+    choices: &[ReasoningEffortConfig],
+    current_effort: ReasoningEffortConfig,
+    direction: ReasoningShortcutDirection,
+) -> Option<ReasoningEffortConfig> {
+    let current_idx = choices
+        .iter()
+        .position(|choice| *choice == current_effort)
+        .unwrap_or_else(|| nearest_choice_index(choices, current_effort));
+    match direction {
+        ReasoningShortcutDirection::Lower => current_idx.checked_sub(1),
+        ReasoningShortcutDirection::Raise => current_idx
+            .checked_add(1)
+            .filter(|idx| *idx < choices.len()),
+    }
+    .map(|idx| choices[idx])
+}
+
+fn nearest_supported_effort(
+    preset: &ModelPreset,
+    requested_effort: Option<ReasoningEffortConfig>,
+) -> Option<ReasoningEffortConfig> {
+    let requested_effort = requested_effort?;
+    let choices = reasoning_choices(preset);
+    let requested_rank = effort_rank(requested_effort);
+    choices
+        .into_iter()
+        .min_by_key(|choice| (effort_rank(*choice) - requested_rank).abs())
+}
+
+fn nearest_choice_index(choices: &[ReasoningEffortConfig], target: ReasoningEffortConfig) -> usize {
+    let target_rank = effort_rank(target);
+    choices
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, choice)| (effort_rank(**choice) - target_rank).abs())
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
+}
+
+fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
+    match effort {
+        ReasoningEffortConfig::None => 0,
+        ReasoningEffortConfig::Minimal => 1,
+        ReasoningEffortConfig::Low => 2,
+        ReasoningEffortConfig::Medium => 3,
+        ReasoningEffortConfig::High => 4,
+        ReasoningEffortConfig::XHigh => 5,
+    }
 }
 
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {

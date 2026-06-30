@@ -17,6 +17,7 @@ use crate::exec_cell::OutputLinesParams;
 use crate::exec_cell::TOOL_CALL_MAX_LINES;
 use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
+#[cfg(test)]
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::live_wrap::take_prefix_by_width;
@@ -64,6 +65,9 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::FileChange;
+use codex_protocol::protocol::HookOutputEntryKind;
+use codex_protocol::protocol::HookRunStatus;
+use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -999,21 +1003,6 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     }
 }
 
-pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
-
-pub(crate) fn card_inner_width(width: u16, max_inner_width: usize) -> Option<usize> {
-    if width < 4 {
-        return None;
-    }
-    let inner_width = std::cmp::min(width.saturating_sub(4) as usize, max_inner_width);
-    Some(inner_width)
-}
-
-/// Render `lines` inside a border sized to the widest span in the content.
-pub(crate) fn with_border(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
-    with_border_internal(lines, /*forced_inner_width*/ None)
-}
-
 /// Render `lines` inside a border whose inner width is at least `inner_width`.
 ///
 /// This is useful when callers have already clamped their content to a
@@ -1226,55 +1215,31 @@ pub(crate) fn new_user_prompt(
 }
 
 #[derive(Debug)]
-pub(crate) struct SessionHeaderHistoryCell {
-    version: &'static str,
-    model: String,
-    model_style: Style,
-    reasoning_effort: Option<ReasoningEffortConfig>,
-    show_fast_status: bool,
-    directory: PathBuf,
-}
+pub(crate) struct SessionHeaderHistoryCell;
 
 impl SessionHeaderHistoryCell {
     pub(crate) fn new(
-        model: String,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-        show_fast_status: bool,
-        directory: PathBuf,
-        version: &'static str,
+        _model: String,
+        _reasoning_effort: Option<ReasoningEffortConfig>,
+        _show_fast_status: bool,
+        _directory: PathBuf,
+        _version: &'static str,
     ) -> Self {
-        Self::new_with_style(
-            model,
-            Style::default(),
-            reasoning_effort,
-            show_fast_status,
-            directory,
-            version,
-        )
+        Self
     }
 
     pub(crate) fn new_with_style(
-        model: String,
-        model_style: Style,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-        show_fast_status: bool,
-        directory: PathBuf,
-        version: &'static str,
+        _model: String,
+        _model_style: Style,
+        _reasoning_effort: Option<ReasoningEffortConfig>,
+        _show_fast_status: bool,
+        _directory: PathBuf,
+        _version: &'static str,
     ) -> Self {
-        Self {
-            version,
-            model,
-            model_style,
-            reasoning_effort,
-            show_fast_status,
-            directory,
-        }
+        Self
     }
 
-    fn format_directory(&self, max_width: Option<usize>) -> String {
-        Self::format_directory_inner(&self.directory, max_width)
-    }
-
+    #[cfg(test)]
     fn format_directory_inner(directory: &Path, max_width: Option<usize>) -> String {
         let formatted = if let Some(rel) = relativize_to_home(directory) {
             if rel.as_os_str().is_empty() {
@@ -1297,80 +1262,11 @@ impl SessionHeaderHistoryCell {
 
         formatted
     }
-
-    fn reasoning_label(&self) -> Option<&'static str> {
-        self.reasoning_effort.map(|effort| match effort {
-            ReasoningEffortConfig::Minimal => "minimal",
-            ReasoningEffortConfig::Low => "low",
-            ReasoningEffortConfig::Medium => "medium",
-            ReasoningEffortConfig::High => "high",
-            ReasoningEffortConfig::XHigh => "xhigh",
-            ReasoningEffortConfig::None => "none",
-        })
-    }
 }
 
 impl HistoryCell for SessionHeaderHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
-            return Vec::new();
-        };
-
-        let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
-
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
-        let title_spans: Vec<Span<'static>> = vec![
-            Span::from(">_ ").dim(),
-            Span::from("OpenAI Codex").bold(),
-            Span::from(" ").dim(),
-            Span::from(format!("(v{})", self.version)).dim(),
-        ];
-
-        const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
-        const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
-        const DIR_LABEL: &str = "directory:";
-        let label_width = DIR_LABEL.len();
-
-        let model_label = format!(
-            "{model_label:<label_width$}",
-            model_label = "model:",
-            label_width = label_width
-        );
-        let reasoning_label = self.reasoning_label();
-        let model_spans: Vec<Span<'static>> = {
-            let mut spans = vec![
-                Span::from(format!("{model_label} ")).dim(),
-                Span::styled(self.model.clone(), self.model_style),
-            ];
-            if let Some(reasoning) = reasoning_label {
-                spans.push(Span::from(" "));
-                spans.push(Span::from(reasoning));
-            }
-            if self.show_fast_status {
-                spans.push("   ".into());
-                spans.push(Span::styled("fast", self.model_style.magenta()));
-            }
-            spans.push("   ".dim());
-            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
-            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
-            spans
-        };
-
-        let dir_label = format!("{DIR_LABEL:<label_width$}");
-        let dir_prefix = format!("{dir_label} ");
-        let dir_prefix_width = UnicodeWidthStr::width(dir_prefix.as_str());
-        let dir_max_width = inner_width.saturating_sub(dir_prefix_width);
-        let dir = self.format_directory(Some(dir_max_width));
-        let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
-
-        let lines = vec![
-            make_row(title_spans),
-            make_row(Vec::new()),
-            make_row(model_spans),
-            make_row(dir_spans),
-        ];
-
-        with_border(lines)
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        Vec::new()
     }
 }
 
@@ -1782,6 +1678,143 @@ impl HistoryCell for DeprecationNoticeCell {
 
         lines
     }
+}
+
+pub(crate) fn summarize_hook_run(run: &HookRunSummary) -> Option<String> {
+    fallback_hook_summary(run)
+}
+
+fn fallback_hook_summary(run: &HookRunSummary) -> Option<String> {
+    if let Some(summary_input) = run.summary_input.as_deref() {
+        let text = clean_hook_summary_text(summary_input);
+        if !text.is_empty() {
+            return Some(limit_summary_chars(&text, 90));
+        }
+    }
+
+    let selected = run
+        .entries
+        .iter()
+        .find(|entry| entry.kind == HookOutputEntryKind::Stop)
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Error)
+        })
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Feedback)
+        })
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Warning)
+        })
+        .or_else(|| {
+            run.entries
+                .iter()
+                .find(|entry| entry.kind == HookOutputEntryKind::Context)
+        });
+
+    let (kind, text) = match selected {
+        Some(entry) => (Some(entry.kind), clean_hook_summary_text(&entry.text)),
+        None => (
+            None,
+            run.status_message
+                .as_deref()
+                .map(clean_hook_summary_text)
+                .unwrap_or_default(),
+        ),
+    };
+    if text.is_empty() {
+        return None;
+    }
+
+    let summary = match kind {
+        Some(HookOutputEntryKind::Stop | HookOutputEntryKind::Error) => {
+            format!("Hook 已拦截，需要处理：{text}")
+        }
+        Some(HookOutputEntryKind::Feedback) => {
+            format!("Hook 给出下一步建议：{text}")
+        }
+        Some(HookOutputEntryKind::Warning) => {
+            format!("Hook 提醒注意风险：{text}")
+        }
+        Some(HookOutputEntryKind::Context) => {
+            if run.status == HookRunStatus::Completed {
+                format!("Hook 补充上下文：{text}")
+            } else {
+                format!("Hook 状态需要关注：{text}")
+            }
+        }
+        None => match run.status {
+            HookRunStatus::Completed => format!("Hook 状态：{text}"),
+            HookRunStatus::Failed | HookRunStatus::Blocked | HookRunStatus::Stopped => {
+                format!("Hook 状态需要关注：{text}")
+            }
+            HookRunStatus::Running => format!("Hook 正在处理：{text}"),
+        },
+    };
+    Some(limit_summary_chars(&summary, 90))
+}
+
+fn clean_hook_summary_text(value: &str) -> String {
+    let without_fences = remove_code_fences(value);
+    let mut output = String::new();
+    for line in without_fences.replace('\r', "").lines() {
+        let trimmed = line.trim();
+        let cleaned = trimmed
+            .trim_start_matches(['#', '>', '-', '*', '•', ' '])
+            .replace(['#', '*', '_', '`', '>'], "");
+        if cleaned.is_empty() || looks_like_path_or_source(&cleaned) {
+            continue;
+        }
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        output.push_str(&cleaned);
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn remove_code_fences(value: &str) -> String {
+    let mut output = String::new();
+    let mut in_code = false;
+    for line in value.replace('\r', "").lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+    output
+}
+
+fn looks_like_path_or_source(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("device:")
+        || lower.starts_with("cwd:")
+        || lower.starts_with("source:")
+        || lower.starts_with("path:")
+        || value.starts_with('/')
+        || value.starts_with("~/")
+}
+
+fn limit_summary_chars(value: &str, max_chars: usize) -> String {
+    let mut summary = String::new();
+    for ch in value.chars().take(max_chars) {
+        summary.push(ch);
+    }
+    if value.chars().count() > max_chars {
+        summary.push('…');
+    }
+    summary
 }
 
 /// Render a summary of configured MCP servers from the current `Config`.
@@ -3862,7 +3895,7 @@ mod tests {
     }
 
     #[test]
-    fn session_header_includes_reasoning_level_when_present() {
+    fn session_header_is_hidden_for_siyuan_startup() {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
             Some(ReasoningEffortConfig::High),
@@ -3871,34 +3904,7 @@ mod tests {
             "test",
         );
 
-        let lines = render_lines(&cell.display_lines(/*width*/ 80));
-        let model_line = lines
-            .iter()
-            .find(|line| line.contains("model:"))
-            .expect("model line");
-
-        assert!(model_line.contains("gpt-4o high   fast"));
-        assert!(model_line.contains("/model to change"));
-    }
-
-    #[test]
-    fn session_header_hides_fast_status_when_disabled() {
-        let cell = SessionHeaderHistoryCell::new(
-            "gpt-4o".to_string(),
-            Some(ReasoningEffortConfig::High),
-            /*show_fast_status*/ false,
-            std::env::temp_dir(),
-            "test",
-        );
-
-        let lines = render_lines(&cell.display_lines(/*width*/ 80));
-        let model_line = lines
-            .iter()
-            .find(|line| line.contains("model:"))
-            .expect("model line");
-
-        assert!(model_line.contains("gpt-4o high"));
-        assert!(!model_line.contains("fast"));
+        assert!(cell.display_lines(/*width*/ 80).is_empty());
     }
 
     #[test]
@@ -4670,6 +4676,36 @@ mod tests {
 
         let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(rendered_transcript, vec!["• We should fix the bug next."]);
+    }
+
+    #[test]
+    fn hook_summary_prefers_assistant_summary_input() {
+        let summary = summarize_hook_run(&HookRunSummary {
+            id: "stop:0:/tmp/hooks.json".to_string(),
+            event_name: codex_protocol::protocol::HookEventName::Stop,
+            handler_type: codex_protocol::protocol::HookHandlerType::Command,
+            execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+            scope: codex_protocol::protocol::HookScope::Turn,
+            source_path: PathBuf::from("/tmp/hooks.json"),
+            display_order: 0,
+            status: HookRunStatus::Completed,
+            status_message: Some("completed".to_string()),
+            summary_input: Some(
+                "Implemented the local summary path.\n\n```text\nsource noise\n```".to_string(),
+            ),
+            started_at: 1,
+            completed_at: Some(2),
+            duration_ms: Some(1),
+            entries: vec![codex_protocol::protocol::HookOutputEntry {
+                kind: HookOutputEntryKind::Warning,
+                text: "This warning should not win".to_string(),
+            }],
+        });
+
+        assert_eq!(
+            summary,
+            Some("Implemented the local summary path.".to_string())
+        );
     }
 
     #[test]

@@ -5068,6 +5068,41 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
+            AppEvent::PersistModelSelectionWithMessage {
+                model,
+                effort,
+                message,
+            } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_model(Some(model.as_str()), effort)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let effort_label = effort
+                            .map(|selected_effort| selected_effort.to_string())
+                            .unwrap_or_else(|| "default".to_string());
+                        tracing::info!("Selected model: {model}, Selected effort: {effort_label}");
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save model for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget
+                                .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
+            }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
@@ -5590,6 +5625,10 @@ impl App {
             } => {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
+            }
+            AppEvent::SubmitUserMessage { text } => {
+                self.chat_widget
+                    .submit_or_queue_user_message(crate::chatwidget::UserMessage::from(text));
             }
             AppEvent::StartPlanOnlyCompactAndImplement {
                 plan_text,
@@ -9574,6 +9613,7 @@ guardian_approval = true
                 display_order: 0,
                 status: AppServerHookRunStatus::Running,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                summary_input: None,
                 started_at: 1,
                 completed_at: None,
                 duration_ms: None,
@@ -9596,6 +9636,7 @@ guardian_approval = true
                 display_order: 0,
                 status: AppServerHookRunStatus::Stopped,
                 status_message: Some("checking go-workflow input policy".to_string()),
+                summary_input: None,
                 started_at: 1,
                 completed_at: Some(11),
                 duration_ms: Some(10),

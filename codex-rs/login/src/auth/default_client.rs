@@ -35,6 +35,16 @@ pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
+/// Version reported to Codex backend feature gates.
+///
+/// Local Siyuan builds keep a branded pre-release suffix in `CARGO_PKG_VERSION`; the backend
+/// expects the upstream Codex semver core for model compatibility checks.
+pub fn codex_server_compat_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+        .split_once('-')
+        .map_or(env!("CARGO_PKG_VERSION"), |(version, _)| version)
+}
+
 pub use codex_config::ResidencyRequirement;
 
 #[derive(Debug, Clone)]
@@ -129,7 +139,7 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    let build_version = codex_server_compat_version();
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
