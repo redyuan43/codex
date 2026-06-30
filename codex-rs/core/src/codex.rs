@@ -72,7 +72,7 @@ use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
-use codex_login::default_client::CODEX_SERVER_COMPAT_VERSION;
+use codex_login::default_client::codex_server_compat_version;
 use codex_login::default_client::originator;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::SandboxState;
@@ -1829,7 +1829,7 @@ impl Session {
         }
         let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
             conversation_id: Some(conversation_id.to_string()),
-            app_version: Some(CODEX_SERVER_COMPAT_VERSION.to_string()),
+            app_version: Some(codex_server_compat_version().to_string()),
             user_account_id: account_id,
             auth_mode: auth_mode.map(|mode| mode.to_string()),
             originator: Some(originator),

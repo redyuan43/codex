@@ -12,8 +12,8 @@ target_app = "cli"
 
 # Local Siyuan debug build announcement. The display layer adds the "Tip: " prefix.
 [[announcements]]
-content = "当前是B.U.S.Corp公司的siyuan模型0.18 Version, Provider: 冯源"
-version_regex = "^0\\.18\\.0-siyuan\\.1$"
+content = "当前是B.U.S.Corp公司的siyuan模型{version} Version, Provider: 冯源"
+version_regex = "^0\\.142\\.4-siyuan\\.6$"
 to_date = "2027-05-10"
 
 [[announcements]]

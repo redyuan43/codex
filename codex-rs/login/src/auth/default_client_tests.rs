@@ -7,8 +7,14 @@ use pretty_assertions::assert_eq;
 fn test_get_codex_user_agent() {
     let user_agent = get_codex_user_agent();
     let originator = originator().value;
-    let prefix = format!("{originator}/{CODEX_SERVER_COMPAT_VERSION} ");
+    let prefix = format!("{originator}/{} ", codex_server_compat_version());
     assert!(user_agent.starts_with(&prefix));
+}
+
+#[test]
+fn server_compat_version_strips_siyuan_suffix() {
+    assert_eq!(codex_server_compat_version(), "0.142.4");
+    assert_eq!(env!("CARGO_PKG_VERSION"), "0.142.4-siyuan.6");
 }
 
 #[test]

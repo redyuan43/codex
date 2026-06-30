@@ -20,5 +20,5 @@ pub fn bundled_models_response()
 
 /// Convert the client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3").
 pub fn client_version_to_whole() -> String {
-    codex_login::default_client::CODEX_SERVER_COMPAT_VERSION.to_string()
+    codex_login::default_client::codex_server_compat_version().to_string()
 }

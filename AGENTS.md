@@ -80,7 +80,7 @@ bash -ic 'type siyuan; siyuan --version'
 
 ```text
 siyuan is aliased to `/home/ivan/github/codex/codex-rs/target/debug/codex'
-codex-cli 0.18.0-siyuan.1
+codex-cli 0.142.4-siyuan.6
 ```
 
 注意点：
@@ -93,13 +93,13 @@ codex-cli 0.18.0-siyuan.1
 用户希望启动 Tip 显示：
 
 ```text
-Tip: 当前是B.U.S.Corp公司的siyuan模型0.18 Version, Provider: 冯源
+Tip: 当前是B.U.S.Corp公司的siyuan模型0.142.4-siyuan.6 Version, Provider: 冯源
 ```
 
 显示层会自动加 `Tip: ` 前缀，因此 `announcement_tip.toml` 里的 `content` 只写正文：
 
 ```toml
-content = "当前是B.U.S.Corp公司的siyuan模型0.18 Version, Provider: 冯源"
+content = "当前是B.U.S.Corp公司的siyuan模型{version} Version, Provider: 冯源"
 ```
 
 踩坑：`codex-rs/tui/src/tooltips.rs` 默认从 GitHub raw URL 拉取 `announcement_tip.toml`，只改仓库根目录 TOML 可能仍显示远端旧 Tip。为了让本地构建稳定显示本地文案，需要：

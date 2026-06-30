@@ -618,7 +618,7 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
 fn client_version_to_whole_uses_server_compat_version() {
     assert_eq!(
         crate::client_version_to_whole(),
-        codex_login::default_client::CODEX_SERVER_COMPAT_VERSION
+        codex_login::default_client::codex_server_compat_version()
     );
 }
 
