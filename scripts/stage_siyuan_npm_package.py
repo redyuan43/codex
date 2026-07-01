@@ -13,7 +13,6 @@ import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CODEX_CLI_ROOT = REPO_ROOT / "codex-cli"
 DEFAULT_TARGET_TRIPLE = "x86_64-unknown-linux-musl"
 CPU_BY_TARGET_TRIPLE = {
     "x86_64-unknown-linux-musl": "x64",
@@ -21,6 +20,130 @@ CPU_BY_TARGET_TRIPLE = {
 }
 PACKAGE_NAME = "@ivanfeng3333/siyuan-codex"
 DEFAULT_VERSION = "0.142.4-siyuan.6"
+SIYUAN_CODEX_JS = """#!/usr/bin/env node
+// Entry point for the self-contained Siyuan Codex Linux npm package.
+
+import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const { platform, arch } = process;
+
+let targetTriple = null;
+if (platform === "linux") {
+  switch (arch) {
+    case "x64":
+      targetTriple = "x86_64-unknown-linux-musl";
+      break;
+    case "arm64":
+      targetTriple = "aarch64-unknown-linux-musl";
+      break;
+    default:
+      break;
+  }
+}
+
+if (!targetTriple) {
+  throw new Error(`Unsupported platform: ${platform} (${arch})`);
+}
+
+const packageRoot = path.join(__dirname, "..");
+const archRoot = path.join(packageRoot, "vendor", targetTriple);
+const binaryPath = path.join(archRoot, "codex", "codex");
+
+if (!existsSync(binaryPath)) {
+  throw new Error(
+    `Missing Siyuan Codex binary for ${targetTriple}. Reinstall @ivanfeng3333/siyuan-codex.`,
+  );
+}
+
+function getUpdatedPath(newDirs) {
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const existingPath = process.env.PATH || "";
+  return [...newDirs, ...existingPath.split(pathSep).filter(Boolean)].join(pathSep);
+}
+
+function detectPackageManager() {
+  const userAgent = process.env.npm_config_user_agent || "";
+  if (/\\bbun\\//.test(userAgent)) {
+    return "bun";
+  }
+
+  const execPath = process.env.npm_execpath || "";
+  if (execPath.includes("bun")) {
+    return "bun";
+  }
+
+  if (
+    __dirname.includes(".bun/install/global") ||
+    __dirname.includes(".bun\\\\install\\\\global")
+  ) {
+    return "bun";
+  }
+
+  return userAgent ? "npm" : null;
+}
+
+const additionalDirs = [];
+const sandboxPathDir = path.join(archRoot, "path");
+if (existsSync(sandboxPathDir)) {
+  additionalDirs.push(sandboxPathDir);
+}
+
+const packageManagerEnvVar =
+  detectPackageManager() === "bun"
+    ? "CODEX_MANAGED_BY_BUN"
+    : "CODEX_MANAGED_BY_NPM";
+const env = {
+  ...process.env,
+  PATH: getUpdatedPath(additionalDirs),
+  [packageManagerEnvVar]: "1",
+  CODEX_MANAGED_PACKAGE_ROOT: realpathSync(packageRoot),
+};
+
+const child = spawn(binaryPath, process.argv.slice(2), {
+  stdio: "inherit",
+  env,
+});
+
+child.on("error", (err) => {
+  console.error(err);
+  process.exit(1);
+});
+
+const forwardSignal = (signal) => {
+  if (child.killed) {
+    return;
+  }
+  try {
+    child.kill(signal);
+  } catch {
+  }
+};
+
+["SIGINT", "SIGTERM", "SIGHUP"].forEach((sig) => {
+  process.on(sig, () => forwardSignal(sig));
+});
+
+const childResult = await new Promise((resolve) => {
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      resolve({ type: "signal", signal });
+    } else {
+      resolve({ type: "code", exitCode: code ?? 1 });
+    }
+  });
+});
+
+if (childResult.type === "signal") {
+  process.kill(process.pid, childResult.signal);
+} else {
+  process.exit(childResult.exitCode);
+}
+"""
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,12 +238,17 @@ def make_executable(path: Path) -> None:
     path.chmod(path.stat().st_mode | 0o755)
 
 
+def write_siyuan_codex_js(path: Path) -> None:
+    path.write_text(SIYUAN_CODEX_JS, encoding="utf-8")
+    make_executable(path)
+
+
 def stage_sources(
     staging_dir: Path, vendor_root: Path, version: str, targets: list[str]
 ) -> None:
     bin_dir = staging_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
+    write_siyuan_codex_js(bin_dir / "codex.js")
 
     for target in targets:
         target_vendor = vendor_root.resolve() / target
