@@ -266,8 +266,9 @@ jobs:
           path: dist/siyuan-npm/*.tgz
 
       - name: Publish GitHub Release asset
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
         run: |
           set -euo pipefail
           release_tag="siyuan-v${VERSION}"
