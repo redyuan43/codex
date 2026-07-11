@@ -4,10 +4,9 @@
 # version_regex matches against the CLI version (env!("CARGO_PKG_VERSION")); omit to apply to all versions.
 # target_app specify which app should display the announcement (cli, vsce, ...).
 
-# Test announcement only for local build version until 2027-05-10 excluded
+# Siyuan builds replace {version} with their Cargo package version at runtime.
 [[announcements]]
-content = "当前是B.U.S.Corp公司的siyuan模型0.144.0-siyuan.1 Version, Provider: 冯源"
-version_regex = "^0\\.144\\.0-siyuan\\.1$"
+content = "当前是B.U.S.Corp公司的siyuan模型{version} Version, Provider: 冯源"
 to_date = "2027-05-10"
 
 [[announcements]]

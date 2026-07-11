@@ -20,6 +20,8 @@ use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -121,6 +123,18 @@ fn effective_originator_prefers_thread_scoped_sources_before_env_originator() {
             "codex_work_desktop",
         ),
         (
+            Some("codex_work_web"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_web",
+        ),
+        (
+            Some("codex_work_mobile"),
+            Some("persisted_originator"),
+            Some("inherited_originator"),
+            "codex_work_mobile",
+        ),
+        (
             None,
             Some("persisted_originator"),
             Some("inherited_originator"),
@@ -185,6 +199,7 @@ fn truncates_before_requested_user_message() {
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         },
     );
@@ -210,6 +225,7 @@ fn truncates_before_requested_user_message() {
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         },
     );
@@ -234,6 +250,7 @@ fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
         &SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         },
     );
@@ -285,6 +302,7 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
         SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id: Some("turn-2".to_string()),
+            active_turn_started_at: None,
             active_turn_start_index: Some(2),
         },
     );
@@ -326,6 +344,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         },
     );
@@ -382,6 +401,64 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
+async fn code_mode_session_provider_is_shared_across_threads() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let first = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start first thread");
+    let second = manager
+        .start_thread(config)
+        .await
+        .expect("start second thread");
+
+    let first_provider = first
+        .thread
+        .codex
+        .session
+        .services
+        .code_mode_service
+        .session_provider();
+    let second_provider = second
+        .thread
+        .codex
+        .session
+        .services
+        .code_mode_service
+        .session_provider();
+    assert!(Arc::ptr_eq(&first_provider, &second_provider));
+    assert!(Arc::ptr_eq(
+        &first_provider,
+        &manager.state.code_mode_session_provider
+    ));
+
+    let mut completed = vec![first.thread_id, second.thread_id];
+    completed.sort_by_key(std::string::ToString::to_string);
+    let report = manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+    assert_eq!(
+        report,
+        ThreadShutdownReport {
+            completed,
+            submit_failed: Vec::new(),
+            timed_out: Vec::new(),
+        }
+    );
+}
+
+#[tokio::test]
 async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
@@ -398,7 +475,9 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     let thread = manager
         .start_thread_with_options(StartThreadOptions {
             config,
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: Some(SessionSource::Internal(
                 InternalSessionSource::MemoryConsolidation,
             )),
@@ -479,6 +558,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 let mut server = codex_mcp::codex_apps_mcp_server_config(
                     "https://selected.invalid",
                     /*apps_mcp_product_sku*/ None,
+                    /*originator*/ None,
                 );
                 let CapabilityRootLocation::Environment { environment_id, .. } =
                     &selected_root.location;
@@ -500,6 +580,10 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     let mut config = test_config().await;
     config.codex_home = temp_dir.path().join("codex-home").abs();
     config.cwd = config.codex_home.abs();
+    config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow apps");
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
 
     let lifecycle_observed = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -540,11 +624,13 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     let first_thread = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
-            metrics_service_name: None,
+            metrics_service_name: Some("codex_work_desktop".to_string()),
             parent_trace: None,
             environments: Vec::new(),
             thread_extension_init: selected_root_init("selected-a", "env-a"),
@@ -555,7 +641,9 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     let second_thread = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -567,8 +655,32 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         })
         .await
         .expect("start second thread");
-    let first_resolved = first_thread.thread.runtime_mcp_config(&config).await;
-    let second_resolved = second_thread.thread.runtime_mcp_config(&config).await;
+    let first_session = &first_thread.thread.codex.session;
+    let first_originator = first_session.originator().await;
+    let first_resolved = first_session
+        .services
+        .mcp_manager
+        .runtime_config_for_step(
+            &config,
+            &first_session.services.mcp_thread_init,
+            &first_session.services.thread_extension_data,
+            &first_originator,
+            /*available_environment_ids*/ &[],
+        )
+        .await;
+    let second_session = &second_thread.thread.codex.session;
+    let second_originator = second_session.originator().await;
+    let second_resolved = second_session
+        .services
+        .mcp_manager
+        .runtime_config_for_step(
+            &config,
+            &second_session.services.mcp_thread_init,
+            &second_session.services.thread_extension_data,
+            &second_originator,
+            /*available_environment_ids*/ &[],
+        )
+        .await;
 
     assert_eq!(
         *lifecycle_observed
@@ -601,12 +713,94 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .collect::<std::collections::BTreeMap<_, _>>()
     };
     assert_eq!(
-        selected_servers(&first_resolved),
+        selected_servers(&first_resolved.config),
         std::collections::BTreeMap::from([("selected-a".to_string(), "env-a".to_string())])
     );
     assert_eq!(
-        selected_servers(&second_resolved),
+        selected_servers(&second_resolved.config),
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
+    );
+    let codex_apps_server = codex_mcp::configured_mcp_servers(&first_resolved.config)
+        .remove(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
+        .expect("Codex Apps server should be configured");
+    let codex_apps_headers = match codex_apps_server.transport {
+        codex_config::McpServerTransportConfig::StreamableHttp { http_headers, .. } => http_headers,
+        codex_config::McpServerTransportConfig::Stdio { .. } => {
+            panic!("Codex Apps server should use streamable HTTP")
+        }
+    };
+    assert_eq!(
+        codex_apps_headers
+            .expect("Codex Apps headers should be configured")
+            .get("originator"),
+        Some(&"codex_work_desktop".to_string())
+    );
+}
+
+#[tokio::test]
+async fn selected_capability_roots_round_trip_through_fork() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "demo@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "build".to_string(),
+            path: PathUri::parse("file:///plugins/demo").expect("plugin root URI"),
+        },
+    }];
+    let inherited = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            allow_provider_model_fallback: false,
+            initial_history: InitialHistory::Forked(vec![RolloutItem::SessionMeta(
+                SessionMetaLine {
+                    meta: SessionMeta {
+                        selected_capability_roots: selected_roots.clone(),
+                        ..SessionMeta::default()
+                    },
+                    git: None,
+                },
+            )]),
+            history_mode: None,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init: Default::default(),
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("start inherited fork");
+    inherited.thread.ensure_rollout_materialized().await;
+    inherited
+        .thread
+        .flush_rollout()
+        .await
+        .expect("flush inherited fork");
+    let inherited_history = RolloutRecorder::get_rollout_history(
+        &inherited
+            .thread
+            .rollout_path()
+            .expect("inherited fork rollout path"),
+    )
+    .await
+    .expect("read inherited fork rollout");
+
+    assert_eq!(
+        inherited_history.get_selected_capability_roots(),
+        selected_roots
     );
 }
 
@@ -647,7 +841,9 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let source = manager
         .start_thread_with_options(StartThreadOptions {
             config: source_config,
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
@@ -930,7 +1126,9 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
     let source = manager
         .start_thread_with_options(StartThreadOptions {
             config: config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: Some(ThreadSource::User),
             dynamic_tools: Vec::new(),
@@ -1167,7 +1365,12 @@ async fn new_uses_active_provider_for_model_refresh() {
         /*external_time_provider*/ None,
     );
 
-    let _ = manager.list_models(RefreshStrategy::Online).await;
+    let _ = manager
+        .list_models(
+            RefreshStrategy::Online,
+            crate::test_support::default_http_client_factory(),
+        )
+        .await;
     assert_eq!(models_mock.requests().len(), 1);
 }
 
@@ -1181,6 +1384,7 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
             append_interrupted_boundary(
                 committed_history,
                 /*turn_id*/ None,
+                /*started_at*/ None,
                 InterruptedTurnHistoryMarker::ContextualUser,
             )
             .get_rollout_items()
@@ -1191,6 +1395,7 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
             RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: None,
+                started_at: None,
                 reason: TurnAbortReason::Interrupted,
                 completed_at: None,
                 duration_ms: None,
@@ -1203,6 +1408,7 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
             append_interrupted_boundary(
                 InitialHistory::New,
                 /*turn_id*/ None,
+                /*started_at*/ None,
                 InterruptedTurnHistoryMarker::ContextualUser,
             )
             .get_rollout_items()
@@ -1212,6 +1418,7 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
             RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: None,
+                started_at: None,
                 reason: TurnAbortReason::Interrupted,
                 completed_at: None,
                 duration_ms: None,
@@ -1231,6 +1438,7 @@ fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
             append_interrupted_boundary(
                 committed_history,
                 /*turn_id*/ None,
+                /*started_at*/ None,
                 InterruptedTurnHistoryMarker::Disabled,
             )
             .get_rollout_items()
@@ -1240,6 +1448,7 @@ fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
             RolloutItem::ResponseItem(user_msg("hello")),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: None,
+                started_at: None,
                 reason: TurnAbortReason::Interrupted,
                 completed_at: None,
                 duration_ms: None,
@@ -1252,6 +1461,7 @@ fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
             append_interrupted_boundary(
                 InitialHistory::New,
                 /*turn_id*/ None,
+                /*started_at*/ None,
                 InterruptedTurnHistoryMarker::Disabled,
             )
             .get_rollout_items()
@@ -1260,6 +1470,7 @@ fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
         serde_json::to_value(vec![RolloutItem::EventMsg(EventMsg::TurnAborted(
             TurnAbortedEvent {
                 turn_id: None,
+                started_at: None,
                 reason: TurnAbortReason::Interrupted,
                 completed_at: None,
                 duration_ms: None,
@@ -1277,6 +1488,7 @@ fn interrupted_snapshot_is_not_mid_turn() {
         RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
         RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some("turn-1".to_string()),
+            started_at: None,
             reason: TurnAbortReason::Interrupted,
             completed_at: None,
             duration_ms: None,
@@ -1288,6 +1500,7 @@ fn interrupted_snapshot_is_not_mid_turn() {
         SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         },
     );
@@ -1334,6 +1547,7 @@ fn completed_legacy_event_history_is_not_mid_turn() {
         SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         },
     );
@@ -1358,6 +1572,7 @@ fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
         SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id: None,
+            active_turn_started_at: None,
             active_turn_start_index: None,
         },
     );
@@ -1444,6 +1659,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let interrupted_abort_json = serde_json::to_value(RolloutItem::EventMsg(
         EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: expected_turn_id,
+            started_at: None,
             reason: TurnAbortReason::Interrupted,
             completed_at: None,
             duration_ms: None,
@@ -1531,6 +1747,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id: Some("turn-explicit".to_string()),
+            active_turn_started_at: None,
             active_turn_start_index: Some(1),
         },
     );
@@ -1563,6 +1780,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
             item,
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(turn_id),
+                started_at: None,
                 reason: TurnAbortReason::Interrupted,
             completed_at: None,
             duration_ms: None,

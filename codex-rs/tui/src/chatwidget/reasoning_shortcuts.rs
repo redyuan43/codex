@@ -138,8 +138,14 @@ impl ChatWidget {
         };
 
         if self.collaboration_modes_enabled() && self.active_mode_kind() == ModeKind::Plan {
+            let warning = self.ultra_reasoning_concurrency_warning(&next_effort);
             self.app_event_tx
                 .send(AppEvent::UpdatePlanModeReasoningEffort(Some(next_effort)));
+            if let Some(warning) = warning {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    crate::history_cell::new_warning_event(warning),
+                )));
+            }
         } else {
             self.apply_model_and_effort_without_persist(current_model, Some(next_effort));
         }
@@ -313,7 +319,8 @@ fn effort_rank(effort: &ReasoningEffortConfig) -> i32 {
         ReasoningEffortConfig::Medium => 3,
         ReasoningEffortConfig::High => 4,
         ReasoningEffortConfig::XHigh => 5,
-        ReasoningEffortConfig::Ultra => 6,
+        ReasoningEffortConfig::Max => 6,
+        ReasoningEffortConfig::Ultra => 7,
         ReasoningEffortConfig::Custom(_) => 3,
     }
 }
@@ -383,7 +390,7 @@ mod tests {
 
     #[test]
     fn next_reasoning_effort_uses_advertised_order_for_custom_levels() {
-        let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+        let custom_effort = ReasoningEffortConfig::Custom("future".to_string());
         let choices = vec![
             ReasoningEffortConfig::High,
             ReasoningEffortConfig::Low,

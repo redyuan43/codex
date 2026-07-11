@@ -4,6 +4,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::Error as IoError;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,6 +16,7 @@ use std::sync::Mutex;
 use chrono::SecondsFormat;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
 use serde_json::Value;
@@ -60,6 +65,7 @@ use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
 use codex_utils_path as path_utils;
@@ -91,7 +97,9 @@ pub enum RolloutRecorderParams {
         originator: String,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
         multi_agent_version: Option<MultiAgentVersion>,
+        history_mode: ThreadHistoryMode,
         initial_window_id: Option<String>,
     },
     Resume {
@@ -182,7 +190,9 @@ impl RolloutRecorderParams {
             originator,
             base_instructions,
             dynamic_tools,
+            selected_capability_roots: Vec::new(),
             multi_agent_version: None,
+            history_mode: Default::default(),
             initial_window_id: None,
         }
     }
@@ -190,6 +200,20 @@ impl RolloutRecorderParams {
     pub fn with_session_id(mut self, session_id: SessionId) -> Self {
         if let Self::Create { session_id: id, .. } = &mut self {
             *id = session_id;
+        }
+        self
+    }
+
+    pub fn with_selected_capability_roots(
+        mut self,
+        selected_capability_roots: Vec<SelectedCapabilityRoot>,
+    ) -> Self {
+        if let Self::Create {
+            selected_capability_roots: roots,
+            ..
+        } = &mut self
+        {
+            *roots = selected_capability_roots;
         }
         self
     }
@@ -204,6 +228,16 @@ impl RolloutRecorderParams {
         } = &mut self
         {
             *version = multi_agent_version;
+        }
+        self
+    }
+
+    pub fn with_history_mode(mut self, history_mode: ThreadHistoryMode) -> Self {
+        if let Self::Create {
+            history_mode: mode, ..
+        } = &mut self
+        {
+            *mode = history_mode;
         }
         self
     }
@@ -732,7 +766,9 @@ impl RolloutRecorder {
                 originator,
                 base_instructions,
                 dynamic_tools,
+                selected_capability_roots,
                 multi_agent_version,
+                history_mode,
                 initial_window_id,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
@@ -769,7 +805,9 @@ impl RolloutRecorder {
                     } else {
                         Some(dynamic_tools)
                     },
+                    selected_capability_roots,
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
+                    history_mode,
                     multi_agent_version,
                     context_window: initial_window_id.map(SessionContextWindow::new),
                 };
@@ -777,18 +815,8 @@ impl RolloutRecorder {
                 (None, Some(log_file_info), path, Some(session_meta))
             }
             RolloutRecorderParams::Resume { path } => {
-                let path = compression::materialize_rollout_for_append(path.as_path()).await?;
-                (
-                    Some(
-                        tokio::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&path)
-                            .await?,
-                    ),
-                    None,
-                    path,
-                    None,
-                )
+                let (path, file) = open_rollout_for_append(path.as_path()).await?;
+                (Some(file), None, path, None)
             }
         };
 
@@ -937,6 +965,12 @@ impl RolloutRecorder {
                     items.push(item);
                 }
                 Err(e) => {
+                    if thread_id.is_none() {
+                        // The first SessionMeta belongs to this rollout. Later SessionMeta lines
+                        // can be copied from fork history, so only validate unknown history modes
+                        // before we have parsed the rollout's own SessionMeta.
+                        reject_unknown_thread_history_mode(&v)?;
+                    }
                     trace!("failed to parse rollout line: {e}");
                     parse_errors = parse_errors.saturating_add(1);
                 }
@@ -998,6 +1032,21 @@ impl RolloutRecorder {
         };
         Ok(())
     }
+}
+
+pub(crate) fn reject_unknown_thread_history_mode(value: &Value) -> std::io::Result<()> {
+    if value.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return Ok(());
+    }
+    let Some(history_mode) = value
+        .get("payload")
+        .and_then(|payload| payload.get("history_mode"))
+    else {
+        return Ok(());
+    };
+    serde_json::from_value::<ThreadHistoryMode>(history_mode.clone())
+        .map(|_| ())
+        .map_err(|err| IoError::other(format!("invalid session metadata history_mode: {err}")))
 }
 
 fn strip_legacy_ghost_snapshot_rollout_line(value: &mut Value) -> bool {
@@ -1103,6 +1152,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         git_sha,
         git_origin_url,
         source,
+        history_mode: _,
         parent_thread_id,
         agent_nickname,
         agent_role,
@@ -1480,10 +1530,13 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
         )));
     };
     fs::create_dir_all(parent)?;
-    std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
         .append(true)
         .create(true)
-        .open(path)
+        .open(path)?;
+    ensure_rollout_is_newline_terminated(&mut file)?;
+    Ok(file)
 }
 
 /// Mutable state owned by the background rollout writer.
@@ -1732,13 +1785,40 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
-    let rollout_path = compression::materialize_rollout_for_append(rollout_path).await?;
-    let file = tokio::fs::OpenOptions::new()
-        .append(true)
-        .open(rollout_path)
-        .await?;
+    let (_rollout_path, file) = open_rollout_for_append(rollout_path).await?;
     let mut writer = JsonlWriter { file };
     writer.write_rollout_item(item).await
+}
+
+async fn open_rollout_for_append(path: &Path) -> std::io::Result<(PathBuf, tokio::fs::File)> {
+    let path = compression::materialize_rollout_for_append(path).await?;
+    let path_for_open = path.clone();
+    let file = tokio::task::spawn_blocking(move || {
+        let mut file = File::options()
+            .read(true)
+            .append(true)
+            .open(path_for_open)?;
+        ensure_rollout_is_newline_terminated(&mut file)?;
+        Ok::<_, std::io::Error>(file)
+    })
+    .await
+    .map_err(IoError::other)??;
+    Ok((path, tokio::fs::File::from_std(file)))
+}
+
+fn ensure_rollout_is_newline_terminated(file: &mut File) -> std::io::Result<()> {
+    if file.metadata()?.len() == 0 {
+        return Ok(());
+    }
+
+    file.seek(SeekFrom::End(-1))?;
+    let mut final_byte = [0];
+    file.read_exact(&mut final_byte)?;
+    if final_byte[0] != b'\n' {
+        file.write_all(b"\n")?;
+        file.flush()?;
+    }
+    Ok(())
 }
 
 struct JsonlWriter {
@@ -1818,6 +1898,7 @@ fn thread_item_from_state_metadata(
                 .or_else(|_| serde_json::from_value(Value::String(item.source)))
                 .unwrap_or(SessionSource::Unknown),
         ),
+        history_mode: item.history_mode,
         parent_thread_id,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,

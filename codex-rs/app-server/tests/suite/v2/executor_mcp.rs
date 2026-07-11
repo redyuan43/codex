@@ -176,7 +176,12 @@ HTTP_PROXY = {http_proxy}
         }))?,
     )?;
 
-    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        // This suite owns environments.toml to exercise explicit executor selection.
+        .without_auto_env()
+        .build()
+        .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.initialize()).await??;
 
     let selected_thread = start_thread(
@@ -191,7 +196,6 @@ HTTP_PROXY = {http_proxy}
     )
     .await?;
 
-    std::fs::write(plugin.path().join(".mcp.json"), r#"{"mcpServers":{}}"#)?;
     let config_path = codex_home.path().join("config.toml");
     let mut config = std::fs::read_to_string(&config_path)?;
     config.push_str(&format!(

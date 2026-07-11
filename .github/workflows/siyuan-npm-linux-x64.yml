@@ -2,33 +2,69 @@ name: siyuan-npm-linux
 
 on:
   push:
-    branches:
-      - siyuan-local-codex
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "npm package version"
-        required: true
-        default: "0.144.0-siyuan.1"
-      publish_npm:
-        description: "Publish the generated tarball to npm"
-        required: true
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
+    tags:
+      - "siyuan-v*"
+
+concurrency:
+  group: ${{ github.workflow }}::${{ github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
+  metadata:
+    name: Validate immutable Siyuan release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      upstream_tag: ${{ steps.release.outputs.upstream_tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate tag and version
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] || {
+            echo "Siyuan releases must run from an immutable tag." >&2
+            exit 1
+          }
+          [[ "${GITHUB_REF_NAME}" =~ ^siyuan-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?-siyuan\.[0-9]+$ ]] || {
+            echo "Invalid Siyuan release tag: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          }
+
+          version="${GITHUB_REF_NAME#siyuan-v}"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' codex-rs/Cargo.toml | head -n 1)"
+          [[ "${version}" == "${cargo_version}" ]] || {
+            echo "Tag version ${version} does not match Cargo version ${cargo_version}." >&2
+            exit 1
+          }
+
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists and will not be overwritten." >&2
+            exit 1
+          fi
+
+          upstream_version="${version%-siyuan.*}"
+          echo "upstream_tag=rust-v${upstream_version}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: metadata
     name: Build Linux package - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 90
     env:
-      VERSION: ${{ inputs.version || '0.144.0-siyuan.1' }}
+      VERSION: ${{ needs.metadata.outputs.version }}
       TARGET: ${{ matrix.target }}
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       CARGO_PROFILE_RELEASE_DEBUG: "false"
@@ -186,10 +222,13 @@ jobs:
 
   publish:
     name: Publish Linux npm package
-    needs: build
+    needs:
+      - build
+      - metadata
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ inputs.version || '0.144.0-siyuan.1' }}
+      UPSTREAM_TAG: ${{ needs.metadata.outputs.upstream_tag }}
+      VERSION: ${{ needs.metadata.outputs.version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -266,7 +305,6 @@ jobs:
           path: dist/siyuan-npm/*.tgz
 
       - name: Publish GitHub Release asset
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
         run: |
@@ -293,20 +331,24 @@ jobs:
 
           - codex
           - codex-linux-sandbox
+
+          Source commit: ${GITHUB_SHA}
+          Upstream baseline: ${UPSTREAM_TAG}
           EOF
 
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$release_tag" "$tarball" dist/siyuan-release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$release_tag" "$tarball" dist/siyuan-release-assets/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "Siyuan Codex ${VERSION}" \
-              --notes-file "$notes_file"
+            echo "Release ${release_tag} already exists and will not be overwritten." >&2
+            exit 1
           fi
 
+          gh release create "$release_tag" "$tarball" dist/siyuan-release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Siyuan Codex ${VERSION}" \
+            --notes-file "$notes_file"
+
       - name: Publish to npm
-        if: ${{ inputs.publish_npm == 'true' }}
+        if: ${{ vars.SIYUAN_PUBLISH_NPM == 'true' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish "dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz" --access public

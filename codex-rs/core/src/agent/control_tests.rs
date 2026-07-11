@@ -3,6 +3,8 @@ use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -17,6 +19,8 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
@@ -38,6 +42,7 @@ use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
 use codex_thread_store::ThreadStore;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -46,9 +51,13 @@ use tokio::time::timeout;
 use toml::Value as TomlValue;
 
 async fn test_config_with_cli_overrides(
-    cli_overrides: Vec<(String, TomlValue)>,
+    mut cli_overrides: Vec<(String, TomlValue)>,
 ) -> (TempDir, Config) {
     let home = TempDir::new().expect("create temp dir");
+    cli_overrides.push((
+        "model".to_string(),
+        TomlValue::String("gpt-5.5".to_string()),
+    ));
     let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(home.path().to_path_buf())
         .cli_overrides(cli_overrides)
@@ -62,12 +71,11 @@ async fn test_config() -> (TempDir, Config) {
     test_config_with_cli_overrides(Vec::new()).await
 }
 
-fn text_input(text: &str) -> Op {
+fn text_input(text: &str) -> Vec<UserInput> {
     vec![UserInput::Text {
         text: text.to_string(),
         text_elements: Vec::new(),
     }]
-    .into()
 }
 
 fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
@@ -308,8 +316,7 @@ async fn send_input_errors_when_manager_dropped() {
             vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
-            }]
-            .into(),
+            }],
         )
         .await
         .expect_err("send_input should fail without a manager");
@@ -342,7 +349,9 @@ async fn on_event_updates_status_from_task_started() {
 async fn on_event_updates_status_from_task_complete() {
     let status = agent_status_from_event(&EventMsg::TurnComplete(TurnCompleteEvent {
         turn_id: "turn-1".to_string(),
+        started_at: None,
         last_agent_message: Some("done".to_string()),
+        error: None,
         completed_at: None,
         duration_ms: None,
         time_to_first_token_ms: None,
@@ -366,6 +375,7 @@ async fn on_event_updates_status_from_error() {
 async fn on_event_updates_status_from_turn_aborted() {
     let status = agent_status_from_event(&EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id: Some("turn-1".to_string()),
+        started_at: None,
         reason: TurnAbortReason::Interrupted,
         completed_at: None,
         duration_ms: None,
@@ -420,8 +430,7 @@ async fn send_input_errors_when_thread_missing() {
             vec![UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
-            }]
-            .into(),
+            }],
         )
         .await
         .expect_err("send_input should fail for missing thread");
@@ -487,8 +496,7 @@ async fn send_input_submits_user_message() {
             vec![UserInput::Text {
                 text: "hello from tests".to_string(),
                 text_elements: Vec::new(),
-            }]
-            .into(),
+            }],
         )
         .await
         .expect("send_input should succeed");
@@ -528,7 +536,11 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
     let submission_id = harness
         .control
-        .send_inter_agent_communication(thread_id, communication.clone())
+        .send_inter_agent_communication(
+            thread_id,
+            communication.clone(),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed");
     assert!(!submission_id.is_empty());
@@ -653,7 +665,11 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication.clone())
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication.clone(),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed after reload");
     let expected = (
@@ -800,7 +816,11 @@ async fn encrypted_inter_agent_communication_clears_existing_last_task_message()
     );
     harness
         .control
-        .send_inter_agent_communication(spawned_agent.thread_id, communication)
+        .send_inter_agent_communication(
+            spawned_agent.thread_id,
+            communication,
+            AgentCommunicationContext::new(AgentCommunicationKind::Followup, ThreadId::new()),
+        )
         .await
         .expect("send_inter_agent_communication should succeed");
 
@@ -1446,7 +1466,35 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
 #[tokio::test]
 async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_limit() {
     let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let selected_capability_roots = vec![SelectedCapabilityRoot {
+        id: "demo@1".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "build".to_string(),
+            path: PathUri::parse("file:///plugins/demo").expect("plugin root URI"),
+        },
+    }];
+    let mut thread_extension_init = ExtensionDataInit::new();
+    thread_extension_init.insert(selected_capability_roots.clone());
+    let parent = harness
+        .manager
+        .start_thread_with_options(StartThreadOptions {
+            config: harness.config.clone(),
+            allow_provider_model_fallback: false,
+            initial_history: InitialHistory::New,
+            history_mode: None,
+            session_source: None,
+            thread_source: None,
+            dynamic_tools: Vec::new(),
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+            thread_extension_init,
+            supports_openai_form_elicitation: false,
+        })
+        .await
+        .expect("start parent thread");
+    let parent_thread_id = parent.thread_id;
+    let parent_thread = parent.thread;
     let startup_turn_context = parent_thread.codex.session.new_default_turn().await;
     parent_thread
         .codex
@@ -1524,6 +1572,14 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
     assert!(
         !history_contains_text(history.raw_items(), "parent startup developer context"),
         "bounded fork should drop parent startup context even when fewer turns exist than requested"
+    );
+    assert_eq!(
+        &child_thread
+            .codex
+            .session
+            .services
+            .selected_capability_roots,
+        &selected_capability_roots
     );
     assert!(
         child_thread
@@ -1972,7 +2028,9 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             tester_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
+                started_at: None,
                 last_agent_message: Some("done".to_string()),
+                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -2059,7 +2117,9 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             tester_turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: tester_turn.sub_id.clone(),
+                started_at: None,
                 last_agent_message: Some("done".to_string()),
+                error: None,
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
@@ -2213,7 +2273,9 @@ async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncat
         .manager
         .start_thread_with_options(StartThreadOptions {
             config: harness.config.clone(),
+            allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            history_mode: None,
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),

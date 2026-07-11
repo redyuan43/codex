@@ -255,10 +255,14 @@ pub(crate) mod announcement {
                 && plan_matches
                 && os_matches
             {
-                latest_match = Some(tip.content);
+                latest_match = Some(render_announcement_content(&tip.content));
             }
         }
         latest_match
+    }
+
+    fn render_announcement_content(content: &str) -> String {
+        content.replace("{version}", CODEX_CLI_VERSION)
     }
 
     impl AnnouncementTip {
@@ -332,6 +336,7 @@ pub(crate) mod announcement {
 mod tests {
     use super::*;
     use crate::tooltips::announcement::parse_announcement_tip_toml;
+    use crate::version::CODEX_CLI_VERSION;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -472,14 +477,13 @@ target_app = "cli"
 version_regex = "^0\\.0\\.0$"
 
 [[announcements]]
-content = "当前是B.U.S.Corp公司的siyuan模型0.144.0-siyuan.1 Version, Provider: 冯源"
+content = "当前是B.U.S.Corp公司的siyuan模型{version} Version, Provider: 冯源"
         "#;
 
         assert_eq!(
-            Some(
-                "当前是B.U.S.Corp公司的siyuan模型0.144.0-siyuan.1 Version, Provider: 冯源"
-                    .to_string()
-            ),
+            Some(format!(
+                "当前是B.U.S.Corp公司的siyuan模型{CODEX_CLI_VERSION} Version, Provider: 冯源"
+            )),
             parse_announcement_tip_toml(toml, /*plan*/ None)
         );
     }

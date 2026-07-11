@@ -19,15 +19,14 @@ CPU_BY_TARGET_TRIPLE = {
     "aarch64-unknown-linux-musl": "arm64",
 }
 PACKAGE_NAME = "@ivanfeng3333/siyuan-codex"
-DEFAULT_VERSION = "0.144.0-siyuan.1"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--version",
-        default=DEFAULT_VERSION,
-        help=f"npm package version to stage. Default: {DEFAULT_VERSION}.",
+        required=True,
+        help="Siyuan package version to stage.",
     )
     parser.add_argument(
         "--vendor-root",
