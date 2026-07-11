@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_features::Feature;
@@ -290,29 +289,6 @@ fn use_lmstudio_provider(turn: &mut TurnContext) {
         provider_info,
         turn.auth_manager.clone(),
     );
-}
-
-fn use_provider_auth(
-    turn: &mut TurnContext,
-    requires_openai_auth: bool,
-    actor_header: Option<(&str, &str)>,
-) {
-    let mut provider_info = turn.config.model_provider.clone();
-    provider_info.requires_openai_auth = requires_openai_auth;
-    provider_info.http_headers = actor_header.map(|(name, value)| {
-        HashMap::from([
-            (name.to_string(), value.to_string()),
-            (
-                "ChatGPT-Account-ID".to_string(),
-                "test-account-id".to_string(),
-            ),
-        ])
-    });
-    turn.auth_manager = None;
-    update_config(turn, |config| {
-        config.model_provider = provider_info.clone();
-    });
-    turn.provider = create_model_provider(provider_info, /*auth_manager*/ None);
 }
 
 struct TestNamespaceExtensionTool {
