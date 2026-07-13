@@ -133,6 +133,7 @@ fn local_model_info_from_id(id: &str, index: usize) -> ModelInfo {
         model_messages: None,
         include_skills_usage_instructions: false,
         default_reasoning_summary: ReasoningSummary::None,
+        supports_reasoning_summary_parameter: false,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
