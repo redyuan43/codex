@@ -18,7 +18,7 @@ CPU_BY_TARGET_TRIPLE = {
     "x86_64-unknown-linux-musl": "x64",
     "aarch64-unknown-linux-musl": "arm64",
 }
-PACKAGE_NAME = "@ivanfeng3333/siyuan-codex"
+PACKAGE_NAME = "siyuan-codex"
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,7 +132,7 @@ const TARGET_BY_ARCH = {
 
 function unsupportedPlatformError() {
   return new Error(
-    `Unsupported platform for @ivanfeng3333/siyuan-codex: ${process.platform}/${process.arch}`,
+    `Unsupported platform for siyuan-codex: ${process.platform}/${process.arch}`,
   );
 }
 
@@ -153,7 +153,7 @@ function findBundledCodex() {
   const binaryPath = candidates.find((candidate) => existsSync(candidate));
   if (!binaryPath) {
     throw new Error(
-      `Missing bundled Siyuan Codex binary for ${targetTriple}. Reinstall with: npm install -g @ivanfeng3333/siyuan-codex@latest`,
+      `Missing bundled Siyuan Codex binary for ${targetTriple}. Reinstall with: npm install -g siyuan-codex@latest`,
     );
   }
   return binaryPath;

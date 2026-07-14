@@ -32,6 +32,13 @@ Codex CLI can also be installed via the following package managers:
 npm install -g @openai/codex
 ```
 
+For the Siyuan release, install the standalone npm package:
+
+```shell
+npm install -g siyuan-codex
+```
+```
+
 ```shell
 # Install using Homebrew
 brew install --cask codex
