@@ -74,7 +74,7 @@ jobs:
       AWS_LC_SYS_NO_JITTER_ENTROPY: "1"
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
