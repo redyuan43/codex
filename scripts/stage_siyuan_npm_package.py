@@ -13,30 +13,26 @@ import tempfile
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CODEX_CLI_ROOT = REPO_ROOT / "codex-cli"
 DEFAULT_TARGET_TRIPLE = "x86_64-unknown-linux-musl"
 CPU_BY_TARGET_TRIPLE = {
     "x86_64-unknown-linux-musl": "x64",
     "aarch64-unknown-linux-musl": "arm64",
 }
-PACKAGE_NAME = "@ivanfeng3333/siyuan-codex"
-DEFAULT_VERSION = "0.142.4-siyuan.6"
+PACKAGE_NAME = "siyuan-codex"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--version",
-        default=DEFAULT_VERSION,
-        help=f"npm package version to stage. Default: {DEFAULT_VERSION}.",
+        required=True,
+        help="Siyuan package version to stage.",
     )
     parser.add_argument(
         "--vendor-root",
         type=Path,
         required=True,
-        help=(
-            "Directory containing canonical Codex packages named by target triple."
-        ),
+        help="Directory containing canonical Codex packages named by target triple.",
     )
     parser.add_argument(
         "--target",
@@ -117,12 +113,94 @@ def make_executable(path: Path) -> None:
     path.chmod(path.stat().st_mode | 0o755)
 
 
+def write_siyuan_entrypoint(path: Path) -> None:
+    path.write_text(
+        """#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const packageRoot = path.join(__dirname, "..");
+
+const TARGET_BY_ARCH = {
+  x64: "x86_64-unknown-linux-musl",
+  arm64: "aarch64-unknown-linux-musl",
+};
+
+function unsupportedPlatformError() {
+  return new Error(
+    `Unsupported platform for siyuan-codex: ${process.platform}/${process.arch}`,
+  );
+}
+
+function findBundledCodex() {
+  if (process.platform !== "linux") {
+    throw unsupportedPlatformError();
+  }
+
+  const targetTriple = TARGET_BY_ARCH[process.arch];
+  if (!targetTriple) {
+    throw unsupportedPlatformError();
+  }
+
+  const candidates = [
+    path.join(packageRoot, "vendor", targetTriple, "bin", "codex"),
+    path.join(packageRoot, "vendor", targetTriple, "codex", "codex"),
+  ];
+  const binaryPath = candidates.find((candidate) => existsSync(candidate));
+  if (!binaryPath) {
+    throw new Error(
+      `Missing bundled Siyuan Codex binary for ${targetTriple}. Reinstall with: npm install -g siyuan-codex@latest`,
+    );
+  }
+  return binaryPath;
+}
+
+const child = spawn(findBundledCodex(), process.argv.slice(2), {
+  stdio: "inherit",
+  env: {
+    ...process.env,
+    CODEX_MANAGED_BY_NPM: "1",
+    CODEX_MANAGED_PACKAGE_ROOT: realpathSync(packageRoot),
+  },
+});
+
+const forwardSignal = (signal) => {
+  if (!child.killed) {
+    child.kill(signal);
+  }
+};
+
+process.on("SIGINT", forwardSignal);
+process.on("SIGTERM", forwardSignal);
+
+child.on("error", (error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+
+child.on("exit", (code, signal) => {
+  if (signal) {
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 1);
+});
+""",
+        encoding="utf-8",
+    )
+    make_executable(path)
+
+
 def stage_sources(
     staging_dir: Path, vendor_root: Path, version: str, targets: list[str]
 ) -> None:
     bin_dir = staging_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
+    write_siyuan_entrypoint(bin_dir / "codex.js")
 
     for target in targets:
         target_vendor = vendor_root.resolve() / target

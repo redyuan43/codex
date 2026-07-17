@@ -1,15 +1,18 @@
 use std::io;
 use std::sync::LazyLock;
 
-use codex_core::config::set_default_oss_provider;
-use codex_model_provider_info::LLAMACPP_OSS_PROVIDER_ID;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
+use crate::key_hint::KeyBindingListExt;
+use codex_model_provider_info::DEFAULT_LMSTUDIO_PORT;
+use codex_model_provider_info::DEFAULT_OLLAMA_PORT;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
-use codex_model_provider_info::built_in_model_providers;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use crossterm::event::{self};
 use crossterm::execute;
 use crossterm::terminal::EnterAlternateScreen;
@@ -74,14 +77,20 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
             key: KeyCode::Char('o'),
             provider_id: OLLAMA_OSS_PROVIDER_ID,
         },
-        SelectOption {
-            label: Line::from(vec!["ll".into(), "a".underlined(), "ma.cpp".into()]),
-            description: "Local llama.cpp server (Responses API, default port 8080)",
-            key: KeyCode::Char('a'),
-            provider_id: LLAMACPP_OSS_PROVIDER_ID,
-        },
     ]
 });
+
+// This startup wizard runs before the main TUI runtime keymap is available, so
+// it mirrors the built-in horizontal list defaults instead of reading config.
+// The shared matcher still covers raw C0 Ctrl-H/Ctrl-L terminal reports.
+const MOVE_LEFT_KEYS: [KeyBinding; 2] = [
+    key_hint::plain(KeyCode::Left),
+    key_hint::ctrl(KeyCode::Char('h')),
+];
+const MOVE_RIGHT_KEYS: [KeyBinding; 2] = [
+    key_hint::plain(KeyCode::Right),
+    key_hint::ctrl(KeyCode::Char('l')),
+];
 
 pub struct OssSelectionWidget<'a> {
     select_options: &'a Vec<SelectOption>,
@@ -98,11 +107,7 @@ pub struct OssSelectionWidget<'a> {
 }
 
 impl OssSelectionWidget<'_> {
-    fn new(
-        lmstudio_status: ProviderStatus,
-        ollama_status: ProviderStatus,
-        llamacpp_status: ProviderStatus,
-    ) -> io::Result<Self> {
+    fn new(lmstudio_status: ProviderStatus, ollama_status: ProviderStatus) -> io::Result<Self> {
         let providers = vec![
             ProviderOption {
                 name: "LM Studio".to_string(),
@@ -110,11 +115,11 @@ impl OssSelectionWidget<'_> {
             },
             ProviderOption {
                 name: "Ollama (Responses)".to_string(),
-                status: ollama_status,
+                status: ollama_status.clone(),
             },
             ProviderOption {
-                name: "llama.cpp".to_string(),
-                status: llamacpp_status,
+                name: "Ollama (Chat)".to_string(),
+                status: ollama_status,
             },
         ];
 
@@ -188,29 +193,35 @@ impl OssSelectionWidget<'_> {
     }
 
     fn handle_select_key(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('c')
-                if key_event
-                    .modifiers
-                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.send_decision("__CANCELLED__".to_string());
             }
-            KeyCode::Left => {
+            _ if MOVE_LEFT_KEYS.is_pressed(key_event) => {
                 self.selected_option = (self.selected_option + self.select_options.len() - 1)
                     % self.select_options.len();
             }
-            KeyCode::Right => {
+            _ if MOVE_RIGHT_KEYS.is_pressed(key_event) => {
                 self.selected_option = (self.selected_option + 1) % self.select_options.len();
             }
-            KeyCode::Enter => {
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            } => {
                 let opt = &self.select_options[self.selected_option];
                 self.send_decision(opt.provider_id.to_string());
             }
-            KeyCode::Esc => {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
                 self.send_decision(LMSTUDIO_OSS_PROVIDER_ID.to_string());
             }
-            other => {
+            KeyEvent { code, .. } => {
+                let other = code;
                 let normalized = Self::normalize_keycode(other);
                 if let Some(opt) = self
                     .select_options
@@ -297,28 +308,38 @@ fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, Color)
     }
 }
 
-pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<String> {
+pub(crate) struct OssProviderSelection {
+    pub(crate) provider: String,
+    pub(crate) manually_selected: bool,
+}
+
+pub async fn select_oss_provider() -> io::Result<OssProviderSelection> {
     // Check provider statuses first
     let lmstudio_status = check_lmstudio_status().await;
     let ollama_status = check_ollama_status().await;
-    let llamacpp_status = check_llamacpp_status().await;
 
-    let running_providers = [
-        (&lmstudio_status, LMSTUDIO_OSS_PROVIDER_ID),
-        (&ollama_status, OLLAMA_OSS_PROVIDER_ID),
-        (&llamacpp_status, LLAMACPP_OSS_PROVIDER_ID),
-    ]
-    .into_iter()
-    .filter_map(|(status, provider_id)| match status {
-        ProviderStatus::Running => Some(provider_id),
-        ProviderStatus::NotRunning | ProviderStatus::Unknown => None,
-    })
-    .collect::<Vec<_>>();
-    if running_providers.len() == 1 {
-        return Ok(running_providers[0].to_string());
+    // Autoselect if only one is running
+    match (&lmstudio_status, &ollama_status) {
+        (ProviderStatus::Running, ProviderStatus::NotRunning) => {
+            let provider = LMSTUDIO_OSS_PROVIDER_ID.to_string();
+            return Ok(OssProviderSelection {
+                provider,
+                manually_selected: false,
+            });
+        }
+        (ProviderStatus::NotRunning, ProviderStatus::Running) => {
+            let provider = OLLAMA_OSS_PROVIDER_ID.to_string();
+            return Ok(OssProviderSelection {
+                provider,
+                manually_selected: false,
+            });
+        }
+        _ => {
+            // Both running or both not running - show UI
+        }
     }
 
-    let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status, llamacpp_status)?;
+    let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -335,26 +356,21 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
         if let Event::Key(key_event) = event::read()?
             && let Some(selection) = widget.handle_key_event(key_event)
         {
-            break Ok(selection);
+            break Ok(OssProviderSelection {
+                provider: selection,
+                manually_selected: true,
+            });
         }
     };
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
-    // If the user manually selected an OSS provider, we save it as the
-    // default one to use later.
-    if let Ok(ref provider) = result
-        && let Err(e) = set_default_oss_provider(codex_home, provider)
-    {
-        tracing::warn!("Failed to save OSS provider preference: {e}");
-    }
-
     result
 }
 
 async fn check_lmstudio_status() -> ProviderStatus {
-    match check_provider_status(LMSTUDIO_OSS_PROVIDER_ID).await {
+    match check_port_status(DEFAULT_LMSTUDIO_PORT).await {
         Ok(true) => ProviderStatus::Running,
         Ok(false) => ProviderStatus::NotRunning,
         Err(_) => ProviderStatus::Unknown,
@@ -362,39 +378,20 @@ async fn check_lmstudio_status() -> ProviderStatus {
 }
 
 async fn check_ollama_status() -> ProviderStatus {
-    match check_provider_status(OLLAMA_OSS_PROVIDER_ID).await {
+    match check_port_status(DEFAULT_OLLAMA_PORT).await {
         Ok(true) => ProviderStatus::Running,
         Ok(false) => ProviderStatus::NotRunning,
         Err(_) => ProviderStatus::Unknown,
     }
 }
 
-async fn check_llamacpp_status() -> ProviderStatus {
-    match check_provider_status(LLAMACPP_OSS_PROVIDER_ID).await {
-        Ok(true) => ProviderStatus::Running,
-        Ok(false) => ProviderStatus::NotRunning,
-        Err(_) => ProviderStatus::Unknown,
-    }
-}
-
-async fn check_provider_status(provider_id: &str) -> io::Result<bool> {
-    let mut providers = built_in_model_providers(/*openai_base_url*/ None);
-    let provider = providers
-        .remove(provider_id)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "provider not found"))?;
-    let base_url = provider.base_url.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "provider must have a base_url")
-    })?;
-    check_base_url_status(&base_url).await
-}
-
-async fn check_base_url_status(base_url: &str) -> io::Result<bool> {
+async fn check_port_status(port: u16) -> io::Result<bool> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
         .map_err(io::Error::other)?;
 
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let url = format!("http://localhost:{port}");
 
     match client.get(&url).send().await {
         Ok(response) => Ok(response.status().is_success()),
@@ -405,23 +402,16 @@ async fn check_base_url_status(base_url: &str) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_backend::VT100Backend;
 
     #[test]
-    fn oss_selection_widget_renders_snapshot() {
-        let widget = OssSelectionWidget::new(
-            ProviderStatus::NotRunning,
-            ProviderStatus::Running,
-            ProviderStatus::Running,
-        )
-        .expect("create widget");
+    fn ctrl_h_l_move_provider_selection() {
+        let mut widget = OssSelectionWidget::new(ProviderStatus::Unknown, ProviderStatus::Unknown)
+            .expect("widget should initialize");
 
-        let mut terminal =
-            Terminal::new(VT100Backend::new(/*width*/ 72, /*height*/ 14)).expect("terminal");
-        terminal
-            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
-            .expect("draw");
-
-        insta::assert_snapshot!(terminal.backend());
+        assert_eq!(widget.selected_option, 0);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(widget.selected_option, 1);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(widget.selected_option, 0);
     }
 }

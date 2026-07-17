@@ -1,0 +1,8 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+  o----.
+     .-'  siyuan
+  .-'
+  '----o
