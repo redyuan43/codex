@@ -200,6 +200,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     let turn_environment = TurnEnvironmentSelection {
         environment_id: "turn-env".to_string(),
         cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
+        workspace_roots: Vec::new(),
     };
     let available_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
@@ -438,6 +439,7 @@ async fn skills_list_truncates_catalog_descriptions_in_tool_output() -> TestResu
             call_id: "call-1".to_string(),
             tool_name: list_tool.tool_name(),
             model: "gpt-test".to_string(),
+            codex_turn_metadata: None,
             truncation_policy: TruncationPolicy::Bytes(1_024),
             conversation_history: ConversationHistory::default(),
             turn_item_emitter: Arc::new(NoopTurnItemEmitter),
@@ -594,6 +596,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
             environments: &[TurnEnvironmentSelection {
                 environment_id: "env-1".to_string(),
                 cwd: PathUri::parse("file:///workspace").expect("cwd URI"),
+                workspace_roots: Vec::new(),
             }],
             ready_selected_capability_roots: &selected_roots,
             session_store: &session_store,
