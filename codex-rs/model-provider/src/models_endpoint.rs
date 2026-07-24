@@ -19,7 +19,7 @@ use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
-use codex_login::default_client::build_default_reqwest_client_for_route_async;
+use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelsEndpointClient;

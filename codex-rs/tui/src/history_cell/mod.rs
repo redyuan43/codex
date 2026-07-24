@@ -115,6 +115,7 @@ mod base;
 mod exec;
 mod hook_cell;
 mod hook_summary;
+mod markdown_render_cache;
 mod mcp;
 mod messages;
 mod notices;

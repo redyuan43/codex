@@ -484,6 +484,10 @@ impl HookRunCell {
             HookRunState::Completed {
                 status, entries, ..
             } => {
+                let system_message = entries
+                    .iter()
+                    .find(|entry| entry.kind == HookOutputEntryKind::Warning);
+                let mut system_message_lines = system_message.map(|entry| entry.text.split('\n'));
                 let status_text = format!("{status:?}").to_lowercase();
                 let header_text = if let Some(first_line) =
                     system_message_lines.as_mut().and_then(Iterator::next)

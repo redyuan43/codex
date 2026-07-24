@@ -467,6 +467,7 @@ pub(crate) struct ChatComposer {
     attachments: AttachmentState,
     placeholder_text: String,
     hook_summary_hint: Option<String>,
+    blocks_direct_input: bool,
     is_task_running: bool,
     queue_submissions: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
@@ -648,6 +649,7 @@ impl ChatComposer {
             attachments: AttachmentState::default(),
             placeholder_text,
             hook_summary_hint: None,
+            blocks_direct_input: false,
             is_task_running: false,
             queue_submissions: false,
             pending_slash_command_history: None,
@@ -1549,6 +1551,11 @@ impl ChatComposer {
     pub(crate) fn set_hook_summary_hint(&mut self, summary: String) {
         let summary = summary.trim();
         self.hook_summary_hint = (!summary.is_empty()).then(|| summary.to_string());
+    }
+
+    pub(crate) fn set_parent_owned_thread(&mut self) {
+        self.blocks_direct_input = true;
+        self.placeholder_text = "Viewing sub-agent — direct input is disabled".to_string();
     }
 
     /// Move the cursor to the end of the current text buffer.
