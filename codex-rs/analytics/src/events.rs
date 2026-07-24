@@ -649,6 +649,8 @@ pub(crate) enum WebSearchActionKind {
 pub(crate) struct CodexCommandExecutionEventParams {
     #[serde(flatten)]
     pub(crate) base: CodexToolItemEventBase,
+    pub(crate) plugin_id: Option<String>,
+    pub(crate) script_path: Option<String>,
     pub(crate) command_execution_source: CommandExecutionSource,
     pub(crate) exit_code: Option<i32>,
     pub(crate) command_total_action_count: u64,
@@ -707,6 +709,7 @@ pub(crate) struct CodexDynamicToolCallEventParams {
     pub(crate) output_content_item_count: Option<u64>,
     pub(crate) output_text_item_count: Option<u64>,
     pub(crate) output_image_item_count: Option<u64>,
+    pub(crate) output_audio_item_count: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -913,6 +916,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) total_tokens: Option<i64>,
     pub(crate) before_first_sampling_ms: u64,
     pub(crate) sampling_ms: u64,
+    pub(crate) compaction_ms: u64,
     pub(crate) between_sampling_overhead_ms: u64,
     pub(crate) tool_blocking_ms: u64,
     pub(crate) after_last_sampling_ms: u64,
@@ -1024,6 +1028,7 @@ pub(crate) struct CodexPluginInstallFailedEventRequest {
 pub(crate) struct CodexOnboardingExternalAgentImportCompleteMetadata {
     pub(crate) import_id: String,
     pub(crate) source: String,
+    pub(crate) provider_id: String,
     #[serde(rename = "type")]
     pub(crate) item_type: String,
     pub(crate) success_count: usize,
@@ -1041,6 +1046,7 @@ pub(crate) struct CodexOnboardingExternalAgentImportCompleteEventRequest {
 pub(crate) struct CodexOnboardingExternalAgentImportFailureMetadata {
     pub(crate) import_id: String,
     pub(crate) source: String,
+    pub(crate) provider_id: String,
     #[serde(rename = "type")]
     pub(crate) item_type: String,
     pub(crate) failure_stage: String,
@@ -1254,6 +1260,7 @@ fn analytics_hook_event_name(event_name: HookEventName) -> &'static str {
         HookEventName::PreCompact => "PreCompact",
         HookEventName::PostCompact => "PostCompact",
         HookEventName::SessionStart => "SessionStart",
+        HookEventName::SessionEnd => "SessionEnd",
         HookEventName::UserPromptSubmit => "UserPromptSubmit",
         HookEventName::SubagentStart => "SubagentStart",
         HookEventName::SubagentStop => "SubagentStop",

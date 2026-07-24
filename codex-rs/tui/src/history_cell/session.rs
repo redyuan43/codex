@@ -1,6 +1,7 @@
 //! Session headers, onboarding guidance, and transcript cards.
 
 use super::*;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 
 /// Render `lines` inside a border whose inner width is at least `inner_width`.
 ///
@@ -54,13 +55,6 @@ fn with_border_internal(
     out.push(vec![format!("╰{}╯", "─".repeat(border_inner_width)).dim()].into());
 
     out
-}
-
-/// Return the emoji followed by a hair space (U+200A).
-/// Using only the hair space avoids excessive padding after the emoji while
-/// still providing a small visual gap across terminals.
-pub(crate) fn padded_emoji(emoji: &str) -> String {
-    format!("{emoji}\u{200A}")
 }
 
 #[derive(Debug)]

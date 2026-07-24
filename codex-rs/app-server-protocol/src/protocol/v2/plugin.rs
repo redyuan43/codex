@@ -135,6 +135,9 @@ pub struct PluginListParams {
     /// the default remote catalog when enabled by feature flag.
     #[ts(optional = nullable)]
     pub marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
+    /// Whether the client requests a fresh remote plugin catalog fetch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_refetch: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -345,6 +348,9 @@ pub enum PluginShareUpdateDiscoverability {
     #[serde(rename = "PRIVATE")]
     #[ts(rename = "PRIVATE")]
     Private,
+    #[serde(rename = "LISTED")]
+    #[ts(rename = "LISTED")]
+    Listed,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -443,6 +449,10 @@ pub struct SkillInterface {
     pub icon_small: Option<AbsolutePathBuf>,
     #[ts(optional)]
     pub icon_large: Option<AbsolutePathBuf>,
+    /// Remote small icon URL from the plugin catalog.
+    pub icon_small_url: Option<String>,
+    /// Remote large icon URL from the plugin catalog.
+    pub icon_large_url: Option<String>,
     #[ts(optional)]
     pub brand_color: Option<String>,
     #[ts(optional)]
@@ -516,6 +526,9 @@ pub struct HookMetadata {
     pub command: Option<String>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
+    /// Configured `additionalContext` spill threshold.
+    /// `null` uses 2,500 tokens; `0` disables spilling.
+    pub additional_context_limit: Option<usize>,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,
     pub plugin_id: Option<String>,
@@ -625,6 +638,8 @@ pub struct PluginSummary {
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
     pub install_policy_source: Option<PluginInstallPolicySource>,
+    #[serde(default)]
+    pub must_show_installation_interstitial: Option<bool>,
     pub auth_policy: PluginAuthPolicy,
     /// Availability state for installing and using the plugin.
     #[serde(default)]
@@ -897,6 +912,8 @@ impl From<CoreSkillInterface> for SkillInterface {
             default_prompt: value.default_prompt,
             icon_small: value.icon_small,
             icon_large: value.icon_large,
+            icon_small_url: None,
+            icon_large_url: None,
         }
     }
 }
