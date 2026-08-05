@@ -28,6 +28,7 @@ pub struct SkillLoadOutcome {
     pub disabled_paths: HashSet<AbsolutePathBuf>,
     pub(crate) skill_roots: Vec<AbsolutePathBuf>,
     pub(crate) skill_root_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+    pub(crate) agent_plugin_skill_paths: HashSet<AbsolutePathBuf>,
     pub(crate) file_systems_by_skill_path: SkillFileSystemsByPath,
     pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
     pub(crate) implicit_skills_by_doc_path: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
@@ -56,9 +57,33 @@ impl SkillLoadOutcome {
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
 
+    pub fn with_disabled_paths(mut self, disabled_paths: HashSet<AbsolutePathBuf>) -> Self {
+        self.disabled_paths = disabled_paths;
+        let (by_scripts_dir, by_doc_path) = crate::build_implicit_skill_path_indexes(
+            self.skills
+                .iter()
+                .filter(|skill| self.is_skill_enabled(skill))
+                .cloned()
+                .collect(),
+        );
+        self.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
+        self.implicit_skills_by_doc_path = Arc::new(by_doc_path);
+        self
+    }
+
+    pub fn is_agent_plugin_skill(&self, skill: &SkillMetadata) -> bool {
+        self.agent_plugin_skill_paths
+            .contains(&skill.path_to_skills_md)
+    }
+
     /// Returns the discovery root that supplied a loaded skill path.
     pub fn skill_root_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
         self.skill_root_by_path.get(path)
+    }
+
+    /// Returns loaded skill roots in discovery order.
+    pub fn skill_roots_in_discovery_order(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
+        self.skill_roots.iter()
     }
 
     pub(crate) fn file_system_for_skill(
@@ -154,6 +179,9 @@ pub fn filter_skill_load_outcome_for_product(
             .map(|(path, root)| (path.clone(), root.clone()))
             .collect(),
     );
+    outcome
+        .agent_plugin_skill_paths
+        .retain(|path| retained_paths.contains(path));
     let retained_roots: HashSet<AbsolutePathBuf> =
         outcome.skill_root_by_path.values().cloned().collect();
     outcome

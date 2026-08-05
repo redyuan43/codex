@@ -1,5 +1,5 @@
 set working-directory := "codex-rs"
-set positional-arguments
+set positional-arguments := true
 
 export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
 
@@ -111,6 +111,7 @@ bench-e2e:
     bazel test --compilation_mode=opt --cache_test_results=no --test_output=streamed //codex-rs:e2e-benchmarks
 
 # Run Bazel-backed end-to-end macrobenchmarks once per case with release-like
+
 # Rust cfg paths but fastbuild codegen.
 bench-e2e-smoke:
     # Avoid optimizer cost because smoke runs only check that benchmarks work.
@@ -203,8 +204,8 @@ argument-comment-lint-from-source *args:
 # Tail logs from the state SQLite database
 [unix]
 log *args:
-    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-state --bin logs_client -- "$@"
+    if [ "${1:-}" = "--" ]; then shift; fi; cargo run -p codex-cli --bin logs_client -- "$@"
 
 [windows]
 log *args:
-    $forwarded_args = @($args | Select-Object -Skip 1); if ($forwarded_args.Count -gt 0 -and $forwarded_args[0] -eq "--") { $forwarded_args = @($forwarded_args | Select-Object -Skip 1) }; cargo run -p codex-state --bin logs_client -- @forwarded_args
+    $forwarded_args = @($args | Select-Object -Skip 1); if ($forwarded_args.Count -gt 0 -and $forwarded_args[0] -eq "--") { $forwarded_args = @($forwarded_args | Select-Object -Skip 1) }; cargo run -p codex-cli --bin logs_client -- @forwarded_args

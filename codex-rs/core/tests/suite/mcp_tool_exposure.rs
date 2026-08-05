@@ -49,7 +49,14 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tempfile::TempDir;
 use tokio::sync::Semaphore;
+use wiremock::Mock;
+use wiremock::Request;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_partial_json;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 struct McpResourceClientCapture {
     client: Arc<Mutex<Option<McpResourceClient>>>,
@@ -60,6 +67,11 @@ struct CoalescingMcpContributor {
     entered: Semaphore,
     release: Semaphore,
     observed_markers: Mutex<Vec<String>>,
+}
+
+struct AppsMcpServerContributor {
+    id: &'static str,
+    url: String,
 }
 
 impl CoalescingMcpContributor {
@@ -106,6 +118,26 @@ impl McpServerContributor<Config> for CoalescingMcpContributor {
                     .forget();
             }
             Vec::new()
+        })
+    }
+}
+
+impl McpServerContributor<Config> for AppsMcpServerContributor {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn contribute<'a>(
+        &'a self,
+        _context: McpServerContributionContext<'a, Config>,
+    ) -> ExtensionFuture<'a, Vec<McpServerContribution>> {
+        Box::pin(async move {
+            let config = serde_json::from_value(json!({ "url": self.url }))
+                .expect("test Apps MCP server config should be valid");
+            vec![McpServerContribution::Set {
+                name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                config: Box::new(config),
+            }]
         })
     }
 }
@@ -303,6 +335,107 @@ startup_timeout_sec = 0.1
         .read_mcp_resource("refreshed", "test://resource")
         .await;
     assert!(resource_client.has_server("refreshed").await);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn elevated_apps_catalog_limit_requires_host_owned_registration() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let codex_home = Arc::new(TempDir::new()?);
+    for extension_id in [None, Some("hosted_plugin_runtime"), Some("test-extension")] {
+        let server = responses::start_mock_server().await;
+        let apps_server = AppsTestServer::mount_searchable(&server).await?;
+        let tools = Arc::new(
+            (0..2_603)
+                .map(|index| {
+                    json!({
+                        "name": format!("calendar_catalog_tool_{index}"),
+                        "description": format!("Read calendar catalog entry {index}."),
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false,
+                        },
+                        "_meta": {
+                            "connector_id": "calendar",
+                            "connector_name": "Calendar",
+                            "connector_description": "Plan events and manage your calendar.",
+                        },
+                    })
+                })
+                .collect::<Vec<_>>(),
+        );
+        Mock::given(method("POST"))
+            .and(path_regex("^/api/codex/ps/mcp/?$"))
+            .and(body_partial_json(json!({ "method": "tools/list" })))
+            .respond_with(move |request: &Request| {
+                let body: Value = serde_json::from_slice(&request.body)
+                    .expect("Apps tools/list should be a valid JSON-RPC request");
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id").cloned().unwrap_or(Value::Null),
+                    "result": {
+                        "tools": tools.as_ref(),
+                    },
+                }))
+            })
+            .with_priority(1)
+            .mount(&server)
+            .await;
+
+        let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+            .with_home(Arc::clone(&codex_home));
+        if let Some(id) = extension_id {
+            let mut extensions = ExtensionRegistryBuilder::new();
+            extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
+                id,
+                url: format!("{}/api/codex/ps/mcp", apps_server.chatgpt_base_url),
+            }));
+            builder = builder.with_extensions(Arc::new(extensions.build()));
+        }
+        let test = builder.build_with_auto_env(&server).await?;
+        let startup = wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await;
+
+        if extension_id == Some("test-extension") {
+            let error = startup.expect_err("an extension must retain the standard catalog limit");
+            assert!(
+                error.to_string().contains("catalog limit of 2048 items"),
+                "an extension named codex_apps must not inherit the trusted Apps limit: {error}"
+            );
+            continue;
+        }
+
+        startup?;
+        let response = responses::mount_sse_once(
+            &server,
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-1"),
+            ]),
+        )
+        .await;
+        test.submit_turn("inspect the large Apps tool catalog")
+            .await?;
+        let body = response.single_request().body_json();
+        let description = body["tools"]
+            .as_array()
+            .and_then(|tools| {
+                tools.iter().find_map(|tool| {
+                    (tool.get("type").and_then(Value::as_str) == Some("tool_search"))
+                        .then(|| tool.get("description").and_then(Value::as_str))
+                        .flatten()
+                })
+            })
+            .expect("large Apps catalogs should remain discoverable through tool_search");
+        assert!(
+            description.contains("Calendar"),
+            "the accepted Apps catalog should remain model-discoverable: {description}"
+        );
+        test.codex.shutdown_and_wait().await?;
+    }
+
     Ok(())
 }
 
@@ -525,7 +658,6 @@ async fn deferred_tool_world_state_survives_resume_without_duplicate_updates() -
 
     initial.codex.ensure_rollout_materialized().await;
     initial.codex.flush_rollout().await?;
-    let home = initial.home.clone();
     let rollout_path = initial
         .session_configured
         .rollout_path
@@ -549,11 +681,10 @@ async fn deferred_tool_world_state_survives_resume_without_duplicate_updates() -
             "mcp__codex_apps__calendar": "Plan events and manage your calendar."
         })
     );
-    drop(initial);
-
     let mut resume_builder = search_capable_apps_builder(apps_server.chatgpt_base_url)
         .with_config(enable_deferred_tool_world_state_without_agents);
-    let resumed = resume_builder.resume(&server, home, rollout_path).await?;
+    let resumed = resume_builder.restart(&server, &initial).await?;
+    drop(initial);
     wait_for_mcp_server(&resumed.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
     resumed
         .submit_turn("inspect unchanged deferred tools after resume")
@@ -587,10 +718,18 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let (apps_server, startup_control) =
-        AppsTestServer::mount_with_startup_control(&server).await?;
-    // The exact step is captured once before the first request; its background retry can recover.
+    // Wiremock has one server thread, so isolate the held MCP response from model/app discovery.
+    let apps_server_mock = responses::start_mock_server().await;
+    let (gated_apps_server, startup_control) =
+        AppsTestServer::mount_with_startup_control(&apps_server_mock).await?;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
     startup_control.fail_next_initialize_attempts(/*attempts*/ 1);
+    let release_apps_recovery = startup_control.hold_next_successful_initialize();
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.mcp_server_contributor(Arc::new(AppsMcpServerContributor {
+        id: "deferred_apps_recovery_test",
+        url: format!("{}/api/codex/ps/mcp", gated_apps_server.chatgpt_base_url),
+    }));
     let call_id = "pause-for-apps";
     let response = mount_sse_sequence(
         &server,
@@ -627,6 +766,7 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
     )
     .await;
     let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config
                 .features
@@ -651,33 +791,13 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
             thread_settings: Default::default(),
         })
         .await?;
-    let request = tokio::time::timeout(Duration::from_secs(3), async {
-        let mut request = None;
-        let mut apps_ready = false;
-        while request.is_none() || !apps_ready {
-            let event = test
-                .codex
-                .next_event()
-                .await
-                .expect("event stream should stay open");
-            match event.msg {
-                EventMsg::RequestUserInput(next_request) => request = Some(next_request),
-                EventMsg::McpStartupUpdate(update)
-                    if update.server == CODEX_APPS_MCP_SERVER_NAME
-                        && matches!(
-                            update.status,
-                            codex_protocol::protocol::McpStartupStatus::Ready
-                        ) =>
-                {
-                    apps_ready = true;
-                }
-                _ => {}
-            }
-        }
-        request.expect("request user input event")
+    let EventMsg::RequestUserInput(request) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RequestUserInput(_))
     })
     .await
-    .expect("Apps should recover before the second sampling request");
+    else {
+        unreachable!("wait_for_event should return the request-user-input event")
+    };
 
     let initial_requests = response.requests();
     assert_eq!(initial_requests.len(), 1);
@@ -699,6 +819,19 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
         !initial_tools_state.contains(SEARCH_CALENDAR_NAMESPACE),
         "Calendar namespace should not be advertised before recovery: {initial_tools_state}"
     );
+
+    release_apps_recovery
+        .send(())
+        .expect("background Apps recovery should still be waiting");
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::McpStartupUpdate(update)
+                if update.server == CODEX_APPS_MCP_SERVER_NAME
+                    && matches!(update.status, codex_protocol::protocol::McpStartupStatus::Ready)
+        )
+    })
+    .await;
 
     test.codex
         .submit(Op::UserInputAnswer {
@@ -757,6 +890,7 @@ async fn apps_guidance_and_deferred_namespace_appear_after_recovery_within_a_tur
         }),
         "recovered request should advertise tool_search: {recovered_body}"
     );
+    assert_eq!(startup_control.initialize_attempts(), 2);
     insta::assert_snapshot!(
         "deferred_tools_recover_during_sampling",
         format_labeled_requests_snapshot(

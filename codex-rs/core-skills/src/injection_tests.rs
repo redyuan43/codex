@@ -17,7 +17,18 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         path_to_skills_md: test_path_buf(path).abs(),
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,
+        remote_plugin_id: None,
     }
+}
+
+#[test]
+fn skill_prompt_contents_are_bounded_at_utf8_boundaries() {
+    let contents = format!("{}é", "a".repeat(MAX_SKILL_PROMPT_BYTES - 1));
+
+    let (bounded, truncated) = bounded_skill_prompt_contents(&contents);
+
+    assert_eq!(bounded.len(), MAX_SKILL_PROMPT_BYTES - 1);
+    assert_eq!(truncated, true);
 }
 
 fn set<'a>(items: &'a [&'a str]) -> HashSet<&'a str> {

@@ -31,6 +31,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::policy_transforms::effective_permission_profile;
+use codex_sandboxing::record_filesystem_sandbox_violation;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -91,8 +92,10 @@ impl ApplyPatchRuntime {
             return None;
         }
 
-        let permissions =
-            effective_permission_profile(attempt.permissions, req.additional_permissions.as_ref());
+        let permissions = effective_permission_profile(
+            attempt.exec_server_permissions,
+            req.additional_permissions.as_ref(),
+        );
         Some(FileSystemSandboxContext {
             permissions: permissions.into(),
             cwd: Some(attempt.sandbox_cwd.clone()),
@@ -136,14 +139,15 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
-        let retry_reason = ctx.retry_reason.clone();
+        let approval_reason = ctx.reasons.approval.clone();
+        let retry_reason = ctx.reasons.retry.clone();
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
-            if req.permissions_preapproved && retry_reason.is_none() {
+            if req.permissions_preapproved && approval_reason.is_none() && retry_reason.is_none() {
                 return ReviewDecision::Approved;
             }
-            if let Some(reason) = retry_reason {
+            if let Some(reason) = retry_reason.or(approval_reason) {
                 return session
                     .request_patch_approval(
                         turn,
@@ -211,8 +215,8 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
 }
 
 impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRuntime {
-    fn workspace_roots<'a>(&self, req: &'a ApplyPatchRequest) -> &'a [PathUri] {
-        req.turn_environment.workspace_roots()
+    fn turn_environment<'a>(&self, req: &'a ApplyPatchRequest) -> &'a TurnEnvironment {
+        &req.turn_environment
     }
 
     fn sandbox_cwd<'a>(&self, req: &'a ApplyPatchRequest) -> Option<&'a PathUri> {
@@ -257,6 +261,7 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
             timed_out: false,
         };
         if failed && is_likely_sandbox_denied(attempt.sandbox, &output) {
+            record_filesystem_sandbox_violation(attempt.sandbox, &output);
             return Err(ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
                 output: Box::new(output),
                 network_policy_decision: None,

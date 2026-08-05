@@ -605,7 +605,7 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Default | ModeKind::PairProgramming | ModeKind::Execute => None,
+            ModeKind::Default => None,
         }
     }
 
@@ -714,8 +714,6 @@ impl ChatWidget {
             let message = match next_mode {
                 ModeKind::Plan => "模型切换成深度思考模式.",
                 ModeKind::Default => "模型切换成默认模式.",
-                ModeKind::PairProgramming => "模型切换成结对编程模式.",
-                ModeKind::Execute => "模型切换成执行模式.",
             };
             self.add_info_message(message.to_string(), /*hint*/ None);
         }

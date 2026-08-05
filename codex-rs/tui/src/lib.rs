@@ -118,9 +118,6 @@ mod diff_render;
 mod exec_cell;
 mod exec_command;
 mod external_agent_config_migration;
-mod external_agent_config_migration_flow;
-mod external_agent_config_migration_model;
-mod external_agent_config_migration_source;
 mod external_editor;
 mod file_search;
 mod frames;
@@ -418,10 +415,6 @@ async fn connect_remote_app_server(
 #[cfg(unix)]
 async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
     let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
-    if !socket_path.as_path().try_exists().unwrap_or(false) {
-        return None;
-    }
-
     match tokio::time::timeout(
         AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT,
         tokio::net::UnixStream::connect(socket_path.as_path()),
@@ -632,7 +625,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 model_providers: None,
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
-                is_pinned: None,
+                section_id: None,
                 parent_thread_id: None,
                 ancestor_thread_id: None,
                 cwd: None,
@@ -747,7 +740,7 @@ fn latest_session_lookup_params(
         },
         source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
-        is_pinned: None,
+        section_id: None,
         parent_thread_id: None,
         ancestor_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
@@ -928,6 +921,9 @@ pub async fn run_main(
         )
     };
 
+    cli.shared
+        .take_auto_review_config_overrides(&mut cli.config_overrides);
+
     // Map the legacy --search flag to the canonical web_search mode.
     if cli.web_search {
         cli.config_overrides
@@ -970,7 +966,7 @@ pub async fn run_main(
         &cli_kv_overrides,
         &launch_loader_overrides,
         strict_config,
-        cli.bypass_hook_trust,
+        cli.bypass_hook_trust || cli.psp,
     );
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         maybe_probe_default_daemon_socket(&codex_home).await
@@ -1123,6 +1119,7 @@ pub async fn run_main(
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
         bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
+        psp: Some(cli.psp),
         additional_writable_roots: additional_dirs,
         ..Default::default()
     };
@@ -1342,7 +1339,7 @@ async fn run_ratatui_app(
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     color_eyre::install()?;
 
-    tooltips::announcement::prewarm();
+    tooltips::announcement::prewarm(initial_config.http_client_factory());
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -2227,7 +2224,7 @@ mod tests {
         Ok(())
     }
 
-    async fn start_test_embedded_app_server(
+    pub(crate) async fn start_test_embedded_app_server(
         config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
         let state_db =
@@ -3115,6 +3112,123 @@ mod tests {
             .expect("thread/start should succeed");
         assert!(!response.thread.id.is_empty());
 
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resume_picker_loads_complete_paginated_and_legacy_transcripts()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        config.terminal_resize_reflow.max_rows =
+            crate::legacy_core::config::TerminalResizeReflowMaxRows::Limit(2);
+        let mut app_server = AppServerSession::new(
+            AppServerClient::InProcess(start_test_embedded_app_server(config.clone()).await?),
+            ThreadParamsMode::Embedded,
+        );
+        let filename_ts = "2025-01-05T12-00-00";
+        let rollout_line = |ordinal: usize, payload: serde_json::Value| {
+            serde_json::json!({
+                "timestamp": "2025-01-05T12:00:00Z",
+                "type": "event_msg",
+                "payload": payload,
+                "ordinal": ordinal,
+            })
+        };
+        for (history_mode, create_rollout) in [
+            app_test_support::create_fake_rollout,
+            app_test_support::create_fake_paginated_rollout,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let thread_id = create_rollout(
+                temp_dir.path(),
+                filename_ts,
+                "2025-01-05T12:00:00Z",
+                "message 0",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create session rollout");
+            let path = app_test_support::rollout_path(temp_dir.path(), filename_ts, &thread_id);
+            let mut contents = std::fs::read_to_string(&path)?;
+            let started = rollout_line(
+                /*ordinal*/ 3,
+                serde_json::json!({ "type": "task_started", "turn_id": "history-turn", "model_context_window": null }),
+            );
+            contents.push_str(&format!("{started}\n"));
+            for index in 0..=100 {
+                let message = format!("message {index}");
+                let payload = if history_mode == 1 {
+                    serde_json::json!({
+                        "type": "item_completed",
+                        "thread_id": thread_id,
+                        "turn_id": "history-turn",
+                        "item": { "type": "UserMessage", "id": format!("user-{index}"),
+                            "content": [{ "type": "text", "text": message }] },
+                    })
+                } else {
+                    serde_json::json!({ "type": "user_message", "message": message })
+                };
+                let item = rollout_line(index + 4, payload);
+                contents.push_str(&format!("{item}\n"));
+            }
+            if history_mode == 1 {
+                for index in 0..125 {
+                    let item = rollout_line(
+                        index + 105,
+                        serde_json::json!({
+                            "type": "item_completed",
+                            "thread_id": thread_id,
+                            "turn_id": "history-turn",
+                            "item": { "type": "Reasoning", "id": format!("hidden-{index}"),
+                                "summary_text": [], "raw_content": [] },
+                        }),
+                    );
+                    contents.push_str(&format!("{item}\n"));
+                }
+            }
+            std::fs::write(path, contents)?;
+            let thread_id = ThreadId::from_string(&thread_id)?;
+            let started = app_server
+                .resume_thread(
+                    config.clone(),
+                    thread_id,
+                    app_server_session::ResumeModelSettings::RestoreFromThread,
+                )
+                .await?;
+            if history_mode == 1 {
+                assert!(
+                    started
+                        .turns
+                        .iter()
+                        .flat_map(|turn| &turn.items)
+                        .any(|item| {
+                            matches!(
+                                item,
+                                codex_app_server_protocol::ThreadItem::UserMessage { .. }
+                            )
+                        })
+                );
+                let preview = crate::resume_picker::load_transcript_preview(
+                    &mut app_server,
+                    thread_id,
+                    /*codex_home*/ None,
+                )
+                .await?;
+                assert!(!preview.is_empty());
+            }
+            let cells = crate::thread_transcript::load_session_transcript(
+                &mut app_server,
+                thread_id,
+                crate::thread_transcript::RawReasoningVisibility::Hidden,
+                /*codex_home*/ None,
+            )
+            .await?;
+            assert!(cells.len() > 100);
+        }
         app_server.shutdown().await?;
         Ok(())
     }

@@ -11,6 +11,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::manager::StaticModelsManager;
@@ -26,6 +27,17 @@ use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 
+/// Remote context-compaction protocols supported by a model provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteCompactionSupport {
+    /// The provider does not support remote compaction.
+    Unsupported,
+    /// The provider supports only the dedicated `/v1/responses/compact` endpoint.
+    V1,
+    /// The provider supports both the dedicated endpoint and `compaction_trigger` items.
+    V2,
+}
+
 /// Optional provider-backed features that Codex may expose at runtime.
 ///
 /// These capabilities are a provider-owned upper bound. Callers can disable
@@ -37,6 +49,8 @@ pub struct ProviderCapabilities {
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
+    pub external_web_access: bool,
+    pub remote_compaction: RemoteCompactionSupport,
 }
 
 impl Default for ProviderCapabilities {
@@ -46,6 +60,8 @@ impl Default for ProviderCapabilities {
             namespace_tools: true,
             image_generation: true,
             web_search: true,
+            external_web_access: true,
+            remote_compaction: RemoteCompactionSupport::V2,
         }
     }
 }
@@ -216,6 +232,21 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
             .unwrap_or_default();
         Arc::new(StaticModelsManager::new(self.auth_manager(), model_catalog))
     }
+
+    /// Creates a model manager that can use a caller-provided cache for remote catalogs.
+    ///
+    /// Providers with remote catalogs should override this method. The default preserves the
+    /// authoritative catalog returned by [`ModelProvider::models_manager_without_cache`] and does
+    /// not consult `cache`. Implementations should likewise ignore the cache when
+    /// `config_model_catalog` supplies an authoritative static catalog.
+    fn models_manager_with_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+        cache: Arc<dyn ModelsCache>,
+    ) -> SharedModelsManager {
+        drop(cache);
+        self.models_manager_without_cache(config_model_catalog)
+    }
 }
 
 pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -291,6 +322,8 @@ impl ModelProvider for ConfiguredModelProvider {
                 namespace_tools: false,
                 image_generation: false,
                 web_search: false,
+                external_web_access: false,
+                remote_compaction: RemoteCompactionSupport::Unsupported,
             };
         }
 
@@ -407,6 +440,31 @@ impl ModelProvider for ConfiguredModelProvider {
             }
         }
     }
+
+    fn models_manager_with_cache(
+        &self,
+        config_model_catalog: Option<ModelsResponse>,
+        cache: Arc<dyn ModelsCache>,
+    ) -> SharedModelsManager {
+        match config_model_catalog {
+            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+                self.auth_manager.clone(),
+                model_catalog,
+            )),
+            None => {
+                let endpoint = Arc::new(OpenAiModelsEndpoint::new(
+                    self.info.clone(),
+                    self.provider_id.clone(),
+                    self.auth_manager.clone(),
+                ));
+                Arc::new(OpenAiModelsManager::new_with_cache(
+                    cache,
+                    endpoint,
+                    self.auth_manager.clone(),
+                ))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -495,7 +553,6 @@ mod tests {
             "supported_in_api": true,
             "priority": 0,
             "upgrade": null,
-            "base_instructions": "base instructions",
             "support_verbosity": false,
             "default_verbosity": null,
             "apply_patch_tool_type": null,
@@ -560,6 +617,8 @@ mod tests {
                 namespace_tools: false,
                 image_generation: false,
                 web_search: false,
+                external_web_access: false,
+                remote_compaction: RemoteCompactionSupport::Unsupported,
             }
         );
     }

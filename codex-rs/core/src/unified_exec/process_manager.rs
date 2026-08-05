@@ -59,6 +59,7 @@ use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_core_plugins::PluginCommandAttribution;
+use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
@@ -1019,12 +1020,17 @@ impl UnifiedExecProcessManager {
             attempt.env_for(command, options, network, environment_id)
         }
         .map_err(ToolError::Codex)?;
+        let network_policy_decider = network_proxy_launch
+            .as_ref()
+            .filter(|launch| launch.policy_decision_timeout_ms.is_some())
+            .and_then(|_| network.and_then(NetworkProxy::remote_policy_decider));
         request.exec_server_network_proxy = network_proxy_launch;
         request.exec_server_env_config = exec_server_env_config;
         self.open_session_with_prepared_exec_env(
             process_id,
             &request,
             windows_sandbox_proxy_settings_mode,
+            network_policy_decider,
             tty,
             spawn_lifecycle,
             environment,
@@ -1041,11 +1047,13 @@ impl UnifiedExecProcessManager {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn open_session_with_prepared_exec_env(
         &self,
         process_id: i32,
         request: &ExecRequest,
         windows_sandbox_proxy_settings_mode: codex_sandboxing::WindowsSandboxProxySettingsMode,
+        network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
@@ -1059,16 +1067,22 @@ impl UnifiedExecProcessManager {
                 ));
             }
 
-            let started = environment
-                .get_exec_backend()
-                .start(exec_server_params_for_request(
-                    process_id,
-                    request,
-                    windows_sandbox_proxy_settings_mode,
-                    tty,
-                ))
-                .await
-                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+            let backend = environment.get_exec_backend();
+            let params = exec_server_params_for_request(
+                process_id,
+                request,
+                windows_sandbox_proxy_settings_mode,
+                tty,
+            );
+            let started = match network_policy_decider {
+                Some(decider) => {
+                    backend
+                        .start_with_network_policy_decider(params, decider)
+                        .await
+                }
+                None => backend.start(params).await,
+            }
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
             return UnifiedExecProcess::from_exec_server_started(started).await;
         }
@@ -1161,7 +1175,7 @@ impl UnifiedExecProcessManager {
             CODEX_THREAD_ID_ENV_VAR.to_string(),
             context.session.thread_id.to_string(),
         );
-        let active_permission_profile = context.turn.config.permissions.active_permission_profile();
+        let active_permission_profile = request.turn_environment.active_permission_profile();
         inject_permission_profile_env(&mut env, active_permission_profile.as_ref());
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
@@ -1178,8 +1192,8 @@ impl UnifiedExecProcessManager {
             .exec_policy
             .create_exec_approval_requirement_for_command(ExecApprovalRequest {
                 command: &request.command,
-                approval_policy: context.turn.approval_policy.value(),
-                permission_profile: context.turn.permission_profile(),
+                approval_policy: context.turn.approval_policy(),
+                permission_profile: request.turn_environment.permission_profile().clone(),
                 windows_sandbox_level: context.turn.windows_sandbox_level,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
@@ -1227,7 +1241,7 @@ impl UnifiedExecProcessManager {
                 &req,
                 &tool_ctx,
                 &context.turn,
-                context.turn.approval_policy.value(),
+                context.turn.approval_policy(),
             )
             .await
             .map(|result| (result.output, result.deferred_network_approval))

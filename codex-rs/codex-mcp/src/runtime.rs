@@ -24,6 +24,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ElicitationResponse;
@@ -59,7 +60,7 @@ pub struct McpRuntimeInput {
     pub codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     pub tool_catalog_cache: McpToolCatalogCache,
     pub codex_apps_tools_cache_key: ConnectorRuntimeContextKey,
-    pub supports_openai_form_elicitation: bool,
+    pub client_mcp_extensions: ClientMcpExtensions,
     pub auth: Option<CodexAuth>,
     pub codex_apps_auth_manager: Option<Arc<AuthManager>>,
     pub elicitation_reviewer: Option<ElicitationReviewerHandle>,
@@ -214,12 +215,20 @@ impl McpRuntime {
 
     /// Captures the latest published configuration and live client handles.
     pub async fn current_binding(&self) -> Option<Arc<McpBinding>> {
+        self.current_binding_with_required_servers(&[]).await
+    }
+
+    /// Captures the latest runtime, waiting for servers explicitly required by this turn.
+    pub async fn current_binding_with_required_servers(
+        &self,
+        required_servers: &[String],
+    ) -> Option<Arc<McpBinding>> {
         let current = self.current.load_full();
         let config = Arc::clone(current.config.as_ref()?);
         Some(Arc::new(
             current
                 .connections
-                .capture_binding_with_metadata(config, current.plugins_available)
+                .capture_binding_with_metadata(config, current.plugins_available, required_servers)
                 .await,
         ))
     }
@@ -238,6 +247,35 @@ impl McpRuntime {
             (None, None) => true,
             (Some(_), None) | (None, Some(_)) => false,
         }
+    }
+
+    /// Waits for the selected server without capturing an execution binding.
+    pub async fn wait_for_server_startup(&self, server: &str) {
+        self.current
+            .load_full()
+            .connections
+            .wait_for_server_startup(server)
+            .await;
+    }
+
+    /// Captures the current runtime after its selected server has finished startup.
+    pub async fn current_binding_for_call(&self, server: &str) -> Option<Arc<McpBinding>> {
+        let current = self.current.load_full();
+        let config = Arc::clone(current.config.as_ref()?);
+        if !current.connections.wait_for_server_startup(server).await {
+            return None;
+        }
+        Some(Arc::new(
+            current
+                .connections
+                .capture_binding_with_metadata(config, current.plugins_available, &[])
+                .await,
+        ))
+    }
+
+    /// Returns the latest published configuration without waiting for clients.
+    pub fn current_config(&self) -> Option<Arc<McpConfig>> {
+        self.current.load().config.clone()
     }
 
     pub fn current_ready_selected_capability_roots(&self) -> Vec<SelectedCapabilityRoot> {
@@ -446,6 +484,7 @@ mod tests {
             enabled: true,
             required: false,
             supports_parallel_tool_calls: false,
+            omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,

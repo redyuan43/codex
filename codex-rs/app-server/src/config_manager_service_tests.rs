@@ -107,6 +107,41 @@ personality = true
 }
 
 #[tokio::test]
+async fn process_routing_does_not_enter_config_layers() -> Result<()> {
+    let tmp = tempdir()?;
+    let mut service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleLoader::default(),
+    );
+    service.psp = true;
+
+    let config = service
+        .load_with_overrides(
+            Some(
+                [("features".to_string(), serde_json::json!({ "apps": true }))]
+                    .into_iter()
+                    .collect(),
+            ),
+            Default::default(),
+        )
+        .await?;
+
+    assert!(config.psp);
+    assert!(config.http_client_factory().has_chatgpt_cookies());
+    assert!(
+        config
+            .config_layer_stack
+            .effective_config()
+            .get("features")
+            .and_then(|features| features.get("psp"))
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn clear_missing_nested_config_is_noop() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let path = tmp.path().join(CONFIG_TOML_FILE);
@@ -1037,6 +1072,63 @@ async fn write_value_reports_managed_override() {
     assert_eq!(overridden.effective_value, serde_json::json!("never"));
 }
 
+/// Legacy managed feature toggles own their normalized enabled origin and override metadata.
+#[tokio::test]
+async fn multi_agent_v2_boolean_layer_owns_enabled_origin_and_overrides() {
+    let tmp = tempdir().expect("tempdir");
+    let user_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(
+        &user_path,
+        "[features.multi_agent_v2]\nenabled = true\nsubagent_usage_hint_text = \"keep\"\n",
+    )
+    .expect("user config");
+
+    let managed_path = tmp.path().join("managed_config.toml");
+    std::fs::write(&managed_path, "[features]\nmulti_agent_v2 = false\n").expect("managed config");
+    let managed_file = AbsolutePathBuf::try_from(managed_path.clone()).expect("managed file");
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::with_managed_config_path_for_tests(managed_path),
+        CloudConfigBundleLoader::default(),
+    );
+
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("read config");
+    assert_eq!(
+        read.origins
+            .get("features.multi_agent_v2.enabled")
+            .expect("enabled origin")
+            .name,
+        ApiConfigLayerSource::LegacyManagedConfigTomlFromFile {
+            file: managed_file.clone(),
+        },
+    );
+
+    let result = service
+        .write_value(ConfigValueWriteParams {
+            file_path: Some(user_path.display().to_string()),
+            key_path: "features.multi_agent_v2.enabled".to_string(),
+            value: serde_json::json!(true),
+            merge_strategy: MergeStrategy::Upsert,
+            expected_version: None,
+        })
+        .await
+        .expect("write config");
+    assert_eq!(result.status, WriteStatus::OkOverridden);
+    let overridden = result.overridden_metadata.expect("overridden metadata");
+    assert_eq!(
+        overridden.overriding_layer.name,
+        ApiConfigLayerSource::LegacyManagedConfigTomlFromFile { file: managed_file }
+    );
+    assert_eq!(overridden.effective_value, serde_json::json!(false));
+}
+
 #[tokio::test]
 async fn upsert_merges_tables_replace_overwrites() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
@@ -1229,6 +1321,69 @@ no_memories_if_mcp_or_web_search = false
             serde_json::json!({"disable_on_external_context": true}),
             r#"[memories]
 disable_on_external_context = true
+"#,
+        ),
+        (
+            r#"[features]
+multi_agent_v2 = true
+"#,
+            "features.multi_agent_v2.subagent_usage_hint_text",
+            serde_json::json!("Delegate carefully."),
+            r#"[features.multi_agent_v2]
+enabled = true
+subagent_usage_hint_text = "Delegate carefully."
+"#,
+        ),
+        (
+            r#"[features]
+multi_agent_v2 = true
+"#,
+            "features.multi_agent_v2",
+            serde_json::json!({"subagent_usage_hint_text": "Delegate carefully."}),
+            r#"[features.multi_agent_v2]
+enabled = true
+subagent_usage_hint_text = "Delegate carefully."
+"#,
+        ),
+        (
+            r#"[features.multi_agent_v2]
+enabled = true
+subagent_usage_hint_text = "Delegate carefully."
+"#,
+            "features.multi_agent_v2",
+            serde_json::json!(false),
+            r#"[features.multi_agent_v2]
+enabled = false
+subagent_usage_hint_text = "Delegate carefully."
+"#,
+        ),
+        (
+            r#"[features.multi_agent_v2]
+enabled = true
+subagent_usage_hint_text = "Delegate carefully."
+"#,
+            "features.multi_agent_v2",
+            serde_json::Value::Null,
+            "",
+        ),
+        (
+            r#"[desktop.features.multi_agent_v2]
+custom = true
+"#,
+            "desktop.features.multi_agent_v2",
+            serde_json::json!(false),
+            r#"[desktop.features]
+multi_agent_v2 = false
+"#,
+        ),
+        (
+            r#"[desktop.features]
+multi_agent_v2 = true
+"#,
+            "desktop.features.multi_agent_v2",
+            serde_json::json!({"custom": true}),
+            r#"[desktop.features.multi_agent_v2]
+custom = true
 "#,
         ),
     ];

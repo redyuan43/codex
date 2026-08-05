@@ -22,6 +22,9 @@ use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
+use crate::user_message_admission::UserMessageAdmission;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -46,6 +49,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_protocol::user_input::UserInput;
 
 use crate::context_manager::is_user_turn_boundary;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -57,6 +61,9 @@ use std::sync::Arc;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
+
+const GPT_5_3_CODEX_SPARK: &str = "gpt-5.3-codex-spark";
+const GPT_5_6_LUNA: &str = "gpt-5.6-luna";
 
 pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
@@ -83,8 +90,18 @@ pub async fn user_input_or_turn(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
+    parent_turn_id: Option<String>,
 ) {
-    user_input_or_turn_inner(sess, sub_id, op, client_user_message_id).await;
+    let admission = user_input_or_turn_inner(
+        sess,
+        sub_id.clone(),
+        op,
+        client_user_message_id,
+        parent_turn_id,
+    )
+    .await;
+    sess.pending_user_message_admissions
+        .complete(&sub_id, admission);
 }
 
 pub async fn update_thread_settings(
@@ -178,7 +195,8 @@ pub(super) async fn user_input_or_turn_inner(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
-) {
+    parent_turn_id: Option<String>,
+) -> CodexResult<UserMessageAdmission> {
     let Op::UserInput {
         items,
         final_output_json_schema,
@@ -197,10 +215,17 @@ pub(super) async fn user_input_or_turn_inner(
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
 
-    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
-        // new_turn_with_sub_id already emits the error event.
-        return;
-    };
+    // new_turn_with_sub_id already emits an error event when settings are invalid.
+    let current_context = sess.new_turn_with_sub_id(sub_id.clone(), updates).await?;
+    let current_context =
+        match image_fallback_model(current_context.model_info.slug.as_str(), &items) {
+            Some(model) => Arc::new(
+                current_context
+                    .with_model(model.to_string(), &sess.services.models_manager)
+                    .await,
+            ),
+            None => current_context,
+        };
     if emit_thread_settings_applied {
         sess.send_event_raw_without_materializing_rollout(Event {
             id: sub_id.clone(),
@@ -220,10 +245,14 @@ pub(super) async fn user_input_or_turn_inner(
         )
         .await
     {
-        Ok(_) => {
+        Ok(turn_id) => {
             current_context.session_telemetry.user_prompt(&items);
+            Ok(UserMessageAdmission::Steered { turn_id })
         }
         Err(SteerInputError::NoActiveTurn(items)) => {
+            if let Some(id) = parent_turn_id {
+                current_context.turn_metadata_state.set_parent_turn_id(id);
+            }
             if let Some(responsesapi_client_metadata) = responsesapi_client_metadata {
                 current_context
                     .turn_metadata_state
@@ -251,15 +280,27 @@ pub(super) async fn user_input_or_turn_inner(
                 crate::tasks::RegularTask::new(),
             )
             .await;
+            Ok(UserMessageAdmission::Started { turn_id: sub_id })
         }
         Err(err) => {
             sess.send_event_raw(Event {
-                id: sub_id,
+                id: sub_id.clone(),
                 msg: EventMsg::Error(err.to_error_event()),
             })
             .await;
+            Err(CodexErr::InvalidRequest(format!(
+                "failed to admit user message: {err:?}"
+            )))
         }
     }
+}
+
+fn image_fallback_model(current_model: &str, items: &[UserInput]) -> Option<&'static str> {
+    (current_model == GPT_5_3_CODEX_SPARK
+        && items
+            .iter()
+            .any(|item| matches!(item, UserInput::Image { .. } | UserInput::LocalImage { .. })))
+    .then_some(GPT_5_6_LUNA)
 }
 
 /// Queues an inter-agent message, then lets the shared pending-work scheduler
@@ -268,10 +309,11 @@ pub async fn inter_agent_communication(
     sess: &Arc<Session>,
     sub_id: String,
     communication: InterAgentCommunication,
+    parent_turn_id: Option<String>,
 ) {
     let trigger_turn = communication.trigger_turn;
     sess.input_queue
-        .enqueue_mailbox_communication(communication)
+        .enqueue_mailbox_communication(communication, parent_turn_id.filter(|_| trigger_turn))
         .await;
     crate::agent_communication::emit_agent_communication_receive(&sub_id);
     if trigger_turn || sess.has_outstanding_durable_sleep() {
@@ -324,6 +366,7 @@ pub async fn resolve_elicitation(
         // Preserve the legacy fallback for clients that only send an action.
         ElicitationAction::Accept => Some(content.unwrap_or_else(|| serde_json::json!({}))),
         ElicitationAction::Decline | ElicitationAction::Cancel => None,
+        _ => None,
     };
     let response = ElicitationResponse {
         action,
@@ -359,29 +402,18 @@ pub async fn exec_approval(
     if let ReviewDecision::ApprovedExecpolicyAmendment {
         proposed_execpolicy_amendment,
     } = &decision
-    {
-        match sess
+        && let Err(err) = sess
             .persist_execpolicy_amendment(proposed_execpolicy_amendment)
             .await
-        {
-            Ok(()) => {
-                sess.record_execpolicy_amendment_message(
-                    &event_turn_id,
-                    proposed_execpolicy_amendment,
-                )
-                .await;
-            }
-            Err(err) => {
-                let message = format!("Failed to apply execpolicy amendment: {err}");
-                tracing::warn!("{message}");
-                let warning = EventMsg::Warning(WarningEvent { message });
-                sess.send_event_raw(Event {
-                    id: event_turn_id.clone(),
-                    msg: warning,
-                })
-                .await;
-            }
-        }
+    {
+        let message = format!("Failed to apply execpolicy amendment: {err}");
+        tracing::warn!("{message}");
+        let warning = EventMsg::Warning(WarningEvent { message });
+        sess.send_event_raw(Event {
+            id: event_turn_id.clone(),
+            msg: warning,
+        })
+        .await;
     }
     match decision {
         ReviewDecision::Abort => {
@@ -745,8 +777,14 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. } => {
-                    user_input_or_turn(&sess, sub.id.clone(), sub.op, sub.client_user_message_id)
-                        .await;
+                    user_input_or_turn(
+                        &sess,
+                        sub.id.clone(),
+                        sub.op,
+                        sub.client_user_message_id,
+                        sub.parent_turn_id,
+                    )
+                    .await;
                     false
                 }
                 Op::ThreadSettings { thread_settings } => {
@@ -754,7 +792,13 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::InterAgentCommunication { communication } => {
-                    inter_agent_communication(&sess, sub.id.clone(), communication).await;
+                    inter_agent_communication(
+                        &sess,
+                        sub.id.clone(),
+                        communication,
+                        sub.parent_turn_id,
+                    )
+                    .await;
                     false
                 }
                 Op::ExecApproval {
@@ -783,10 +827,6 @@ pub(super) async fn submission_loop(
                 }
                 Op::RefreshMcpServers => {
                     refresh_mcp_servers(&sess);
-                    false
-                }
-                Op::ReloadMcpConfig { config } => {
-                    sess.refresh_mcp_config(config).await;
                     false
                 }
                 Op::ReloadUserConfig => {
@@ -922,3 +962,7 @@ pub(super) fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     }
     dispatch_span
 }
+
+#[cfg(test)]
+#[path = "handlers_tests.rs"]
+mod tests;
