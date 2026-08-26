@@ -4,8 +4,10 @@ members = [
     "analytics",
     "agent-graph-store",
     "agent-identity",
+    "agent-roles",
     "backend-client",
     "bwrap",
+    "build-info",
     "ansi-escape",
     "async-utils",
     "app-server",
@@ -41,8 +43,9 @@ members = [
     "core",
     "core-api",
     "core-plugins",
-    "core-skills",
+    "diagnostics",
     "hooks",
+    "history",
     "http-client",
     "secrets",
     "exec",
@@ -56,11 +59,13 @@ members = [
     "ext/extension-api",
     "ext/goal",
     "ext/git-attribution",
-    "ext/guardian",
+    "ext/guardian-v2",
+    "ext/history-notes",
     "ext/image-generation",
     "ext/items",
     "ext/memories",
     "ext/mcp",
+    "ext/queue",
     "ext/skills",
     "ext/web-search",
     "external-agent-migration",
@@ -93,6 +98,8 @@ members = [
     "tools",
     "v8-poc",
     "websocket-client",
+    "worktree",
+    "workload-identity",
     "utils/absolute-path",
     "utils/audio",
     "utils/path-uri",
@@ -104,6 +111,7 @@ members = [
     "utils/home-dir",
     "utils/pty",
     "utils/readiness",
+    "utils/redacted-string",
     "utils/rustls-provider",
     "utils/string",
     "utils/cli",
@@ -144,90 +152,91 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal
 app_test_support = { path = "app-server/tests/common" }
-codex-analytics = { path = "analytics" }
+codex-agent-extension = { path = "ext/agent" }
 codex-agent-graph-store = { path = "agent-graph-store" }
 codex-agent-identity = { path = "agent-identity" }
+codex-agent-roles = { path = "agent-roles" }
+codex-analytics = { path = "analytics" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
-codex-aws-auth = { path = "aws-auth" }
 codex-app-server = { path = "app-server" }
-codex-app-server-transport = { path = "app-server-transport" }
-codex-app-server-daemon = { path = "app-server-daemon" }
 codex-app-server-client = { path = "app-server-client" }
+codex-app-server-daemon = { path = "app-server-daemon" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-protocol-noop-macros = { path = "app-server-protocol-noop-macros" }
 codex-app-server-test-client = { path = "app-server-test-client" }
+codex-app-server-transport = { path = "app-server-transport" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
+codex-aws-auth = { path = "aws-auth" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
-codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
-codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
 codex-cloud-config = { path = "cloud-config" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
 codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-code-mode-runtime = { path = "code-mode-runtime" }
-codex-home = { path = "codex-home" }
-codex-http-client = { path = "http-client" }
-codex-websocket-client = { path = "websocket-client" }
+codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
-codex-agent-extension = { path = "ext/agent" }
 codex-connectors-extension = { path = "ext/connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
-codex-core-skills = { path = "core-skills" }
+codex-diagnostics = { path = "diagnostics" }
 codex-exec = { path = "exec" }
-codex-file-system = { path = "file-system" }
-codex-exec-server-protocol = { path = "exec-server-protocol" }
 codex-exec-server = { path = "exec-server" }
+codex-exec-server-protocol = { path = "exec-server-protocol" }
 codex-exec-server-test-support = { path = "exec-server/tests/support" }
 codex-execpolicy = { path = "execpolicy" }
+codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-extension-api = { path = "ext/extension-api" }
 codex-extension-items = { path = "ext/items" }
-codex-goal-extension = { path = "ext/goal" }
-codex-git-attribution = { path = "ext/git-attribution" }
-codex-guardian = { path = "ext/guardian" }
-codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
-codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
-codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
+codex-file-system = { path = "file-system" }
 codex-file-watcher = { path = "file-watcher" }
+codex-git-attribution = { path = "ext/git-attribution" }
 codex-git-utils = { path = "git-utils" }
+codex-goal-extension = { path = "ext/goal" }
+codex-guardian-v2 = { path = "ext/guardian-v2" }
+codex-history = { path = "history" }
+codex-history-notes-extension = { path = "ext/history-notes" }
+codex-home = { path = "codex-home" }
 codex-hooks = { path = "hooks" }
+codex-http-client = { path = "http-client" }
+codex-image-generation-extension = { path = "ext/image-generation" }
+codex-install-context = { path = "install-context" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
-codex-message-history = { path = "message-history" }
-codex-memories-extension = { path = "ext/memories" }
-codex-web-search-extension = { path = "ext/web-search" }
-codex-memories-read = { path = "memories/read" }
-codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
 codex-mcp-extension = { path = "ext/mcp" }
 codex-mcp-server = { path = "mcp-server" }
+codex-memories-extension = { path = "ext/memories" }
+codex-memories-read = { path = "memories/read" }
+codex-memories-write = { path = "memories/write" }
+codex-message-history = { path = "message-history" }
+codex-model-provider = { path = "model-provider" }
 codex-model-provider-info = { path = "model-provider-info" }
 codex-models-manager = { path = "models-manager" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-plugin = { path = "plugin" }
-codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
-codex-protocol = { path = "protocol" }
 codex-prompts = { path = "prompts" }
-codex-responses-api-proxy = { path = "responses-api-proxy" }
+codex-protocol = { path = "protocol" }
+codex-queue-extension = { path = "ext/queue" }
 codex-response-debug-context = { path = "response-debug-context" }
+codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-rollout = { path = "rollout" }
 codex-rollout-trace = { path = "rollout-trace" }
@@ -235,8 +244,8 @@ codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
-codex-skills-extension = { path = "ext/skills" }
 codex-skills = { path = "skills" }
+codex-skills-extension = { path = "ext/skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
@@ -262,6 +271,7 @@ codex-utils-path = { path = "utils/path-utils" }
 codex-utils-path-uri = { path = "utils/path-uri" }
 codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
+codex-utils-redacted-string = { path = "utils/redacted-string" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
@@ -269,7 +279,10 @@ codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
 codex-utils-template = { path = "utils/template" }
 codex-v8-poc = { path = "v8-poc" }
+codex-web-search-extension = { path = "ext/web-search" }
+codex-websocket-client = { path = "websocket-client" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
+codex-workload-identity = { path = "workload-identity" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
@@ -308,8 +321,8 @@ clatter = { version = "2.2.0", default-features = false, features = [
 color-eyre = "0.6.3"
 constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
-crypto_box = { version = "0.9.1", features = ["seal"] }
 crossterm = "0.29.0"
+crypto_box = { version = "0.9.1", features = ["seal"] }
 ctor = "0.6.3"
 deno_core_icudata = "0.77.0"
 derive_more = "2"
@@ -326,6 +339,7 @@ flate2 = "1.1.8"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 gix = { version = "0.81.0", default-features = false, features = ["sha1"] }
+gix-url = "0.35.2"
 glob = "0.3"
 globset = "0.4"
 hmac = "0.12.1"
@@ -352,7 +366,7 @@ libc = "0.2.182"
 # https://www.sqlite.org/wal.html#the_wal_reset_bug
 libsqlite3-sys = { version = "0.37", default-features = false }
 log = "0.4"
-lru = "0.16.3"
+lru = "0.18.2"
 maplit = "1.0.2"
 memchr = "2.7.6"
 mime_guess = "2.0.5"
@@ -389,10 +403,12 @@ regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", default-features = false, features = [
     "cookies",
+    "http2",
     "rustls-tls-native-roots",
 ] }
-rmcp = { version = "=3.0.0", default-features = false }
+rmcp = { version = "=3.1.3", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+rustix = { version = "1.1.4", features = ["net"] }
 rustls = { version = "0.23", default-features = false, features = [
     "aws_lc_rs",
     "std",
@@ -400,6 +416,7 @@ rustls = { version = "0.23", default-features = false, features = [
 rustls-native-certs = "0.8.3"
 rustls-pki-types = "1.14.0"
 schemars = "0.8.22"
+scopeguard = "1.2.0"
 seccompiler = "0.5.0"
 semver = "1.0"
 sentry = { version = "0.46.0", default-features = false, features = [
@@ -419,10 +436,10 @@ serde_with = "3.17"
 serde_yaml = "0.9"
 serial_test = "3.2.0"
 sha1 = "0.10.6"
-scopeguard = "1.2.0"
 sha2 = "0.10"
 shlex = "1.3.0"
 similar = "2.7.0"
+socket2 = "0.6.1"
 symphonia = { version = "0.6.0", default-features = false, features = [
     "isomp4",
     "mkv",
@@ -430,7 +447,6 @@ symphonia = { version = "0.6.0", default-features = false, features = [
     "ogg",
     "wav",
 ] }
-socket2 = "0.6.1"
 # When bumping sqlx, audit the SQLite constructor deny list in clippy.toml.
 sqlx = { version = "0.9.0", default-features = false, features = [
     "chrono",
@@ -468,15 +484,19 @@ tokio-tungstenite = { version = "0.28.0", features = [
 tokio-util = "0.7.18"
 toml = "0.9.5"
 toml_edit = "0.24.0"
+tonic = { version = "0.14.3", default-features = false, features = [
+    "channel",
+    "codegen",
+] }
+tonic-prost = "0.14.3"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
 tracing-opentelemetry = "0.32.0"
 tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
-tonic = { version = "0.14.3", default-features = false, features = ["channel", "codegen"] }
-tonic-prost = "0.14.3"
 tree-sitter = "0.25.10"
 tree-sitter-bash = "0.25"
+tree-sitter-powershell = "=0.26.4"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
@@ -488,7 +508,7 @@ uuid = "1"
 v8 = "=150.4.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
-webbrowser = "1.0"
+webbrowser = "1.2.2"
 which = "8"
 whoami = "1.6.1"
 wildmatch = "2.6.1"
@@ -543,11 +563,7 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
-ignored = [
-    "icu_provider",
-    "openssl-sys",
-    "codex-v8-poc",
-]
+ignored = ["icu_provider", "openssl-sys", "codex-v8-poc"]
 
 [profile.dev]
 # Keep line tables/backtraces while avoiding expensive full variable debug info
@@ -555,14 +571,14 @@ ignored = [
 debug = "limited"
 
 [profile.dev-small]
+debug = "none"
 inherits = "dev"
 opt-level = 0
-debug = "none"
 strip = "symbols"
 
 [profile.release]
-lto = "thin"
 debug = "line-tables-only"
+lto = "thin"
 split-debuginfo = "off"
 # Keep release binaries symbolicateable until packaging has archived the
 # sidecar symbols and stripped the binaries.
@@ -572,8 +588,8 @@ strip = false
 codegen-units = 4
 
 [profile.profiling]
-inherits = "release"
 debug = "full"
+inherits = "release"
 lto = false
 strip = false
 
@@ -586,7 +602,7 @@ opt-level = 0
 [patch.crates-io]
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
-crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "f69a4a0499f2fdc7d5d222df32373ffffe9ba3f5" }
+crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "45fecb9508105988f42fe6ff0441783ed3717f92" }
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "0e5b2d73aa18dd9f0a50ee9ff199d5aef7594186" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f" }
 

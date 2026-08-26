@@ -1,4 +1,3 @@
-use super::head_tail_buffer::HeadTailBuffer;
 use super::*;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::environment_selection::TurnEnvironmentState;
@@ -10,7 +9,6 @@ use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::WriteStdinRequest;
-use crate::unified_exec::process::OutputHandles;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEventReceiver;
 use codex_exec_server::ExecProcessFuture;
@@ -125,13 +123,18 @@ async fn exec_command_with_tty(
             )
             .await?,
     );
-    let context =
-        UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
+    let context = UnifiedExecContext::new(
+        Arc::clone(session),
+        crate::session::step_context::StepContext::for_test(Arc::clone(turn)),
+        tokio_util::sync::CancellationToken::new(),
+        "call".to_string(),
+    );
     let started_at = Instant::now();
     let process_started_alive = !process.has_exited() && process.exit_code().is_none();
     if process_started_alive {
         let entry = ProcessEntry {
             process: Arc::clone(&process),
+            plugin_metrics_sidecar: None,
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone().into(),
@@ -150,20 +153,9 @@ async fn exec_command_with_tty(
             .insert(process_id, entry);
     }
 
-    let OutputHandles {
-        output_buffer,
-        output_notify,
-        output_closed,
-        output_closed_notify,
-        cancellation_token,
-    } = process.output_handles();
     let deadline = started_at + Duration::from_millis(yield_time_ms);
     let collected_output = UnifiedExecProcessManager::collect_output_until_deadline(
-        &output_buffer,
-        &output_notify,
-        &output_closed,
-        &output_closed_notify,
-        &cancellation_token,
+        process.output_handles(),
         Some(session.subscribe_elicitation_pause_state()),
         deadline,
     )
@@ -201,7 +193,7 @@ async fn exec_command_with_tty(
         chunk_id: generate_chunk_id(),
         wall_time,
         raw_output: collected,
-        truncation_policy: turn.model_info.truncation_policy.into(),
+        truncation_policy: turn.model_info().truncation_policy.into(),
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
@@ -328,33 +320,6 @@ async fn write_stdin(
             interaction_event: None,
         })
         .await
-}
-
-#[test]
-fn push_chunk_preserves_prefix_and_suffix() {
-    let mut buffer = HeadTailBuffer::default();
-    buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
-    buffer.push_chunk(vec![b'b']);
-    buffer.push_chunk(vec![b'c']);
-
-    assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
-    let snapshot = buffer.snapshot_chunks();
-    let head_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 2;
-    let tail_bytes = UNIFIED_EXEC_OUTPUT_MAX_BYTES - head_bytes;
-    let mut expected_tail = vec![b'a'; tail_bytes - 2];
-    expected_tail.extend_from_slice(b"bc");
-    assert_eq!(snapshot, vec![vec![b'a'; head_bytes], expected_tail]);
-}
-
-#[test]
-fn head_tail_buffer_default_preserves_prefix_and_suffix() {
-    let mut buffer = HeadTailBuffer::default();
-    buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
-    buffer.push_chunk(b"bc".to_vec());
-
-    let rendered = buffer.to_bytes();
-    assert_eq!(rendered.first(), Some(&b'a'));
-    assert!(rendered.ends_with(b"bc"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -616,6 +581,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
         process_id,
         ProcessEntry {
             process,
+            plugin_metrics_sidecar: None,
             call_id: "call".to_string(),
             process_id,
             cwd: cwd.into(),
@@ -689,6 +655,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
         process_id,
         ProcessEntry {
             process: Arc::clone(&process),
+            plugin_metrics_sidecar: None,
             call_id: "call".to_string(),
             process_id,
             cwd: cwd.into(),
@@ -809,19 +776,8 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
     process.write(b"printf 'remote-unified-exec\\n'\n").await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let crate::unified_exec::process::OutputHandles {
-        output_buffer,
-        output_notify,
-        output_closed,
-        output_closed_notify,
-        cancellation_token,
-    } = process.output_handles();
     let collected = UnifiedExecProcessManager::collect_output_until_deadline(
-        &output_buffer,
-        &output_notify,
-        &output_closed,
-        &output_closed_notify,
-        &cancellation_token,
+        process.output_handles(),
         /*pause_state*/ None,
         Instant::now() + Duration::from_millis(2_500),
     )

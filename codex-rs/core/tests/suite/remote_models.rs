@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 use anyhow::Result;
+use codex_core::TurnInputRequest;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -22,7 +23,7 @@ use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
-use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::TempDirExt;
 use core_test_support::load_default_config_for_test;
@@ -47,6 +48,7 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
@@ -75,10 +77,20 @@ async fn unknown_model_sends_builtin_instructions() -> Result<()> {
 
     test.submit_turn("use fallback model metadata").await?;
 
-    assert_eq!(
-        response.single_request().instructions_text(),
-        BASE_INSTRUCTIONS
-    );
+    let request = response.single_request();
+    assert_eq!(request.instructions_text(), BASE_INSTRUCTIONS);
+    let body = request.body_json();
+    let tools = body["tools"]
+        .as_array()
+        .expect("fallback model tools should be present");
+    for tool_name in ["exec_command", "write_stdin"] {
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"].as_str() == Some(tool_name)),
+            "fallback model should expose {tool_name}: {tools:?}"
+        );
+    }
     Ok(())
 }
 
@@ -109,7 +121,9 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }),
         ..specific
     };
@@ -122,7 +136,9 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }),
         ..generic
     };
@@ -206,16 +222,10 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
         .await?;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check context window".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check context window".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let turn_started_event = wait_for_event(&codex, |event| {
@@ -273,16 +283,10 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
         .await?;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check context window".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check context window".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let turn_started_event = wait_for_event(&codex, |event| {
@@ -339,16 +343,10 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
         .await?;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check context window".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check context window".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let turn_started_event = wait_for_event(&codex, |event| {
@@ -368,8 +366,13 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
     Ok(())
 }
 
+#[test_case(ReasoningEffort::Custom("future".to_string()), "future"; "custom")]
+#[test_case(ReasoningEffort::Persistent, "disabled"; "persistent")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_models_long_model_slug_is_sent_with_custom_reasoning() -> Result<()> {
+async fn remote_models_long_model_slug_is_sent_with_supported_reasoning(
+    effort: ReasoningEffort,
+    expected_wire_effort: &str,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -382,16 +385,15 @@ async fn remote_models_long_model_slug_is_sent_with_custom_reasoning() -> Result
         /*priority*/ 1_000,
         TruncationPolicyConfig::bytes(/*limit*/ 10_000),
     );
-    let custom_reasoning_effort = ReasoningEffort::Custom("future".to_string());
-    remote_model.default_reasoning_level = Some(custom_reasoning_effort.clone());
+    remote_model.default_reasoning_level = Some(effort.clone());
     remote_model.supported_reasoning_levels = vec![
         ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
         },
         ReasoningEffortPreset {
-            effort: custom_reasoning_effort.clone(),
-            description: custom_reasoning_effort.to_string(),
+            effort: effort.clone(),
+            description: effort.to_string(),
         },
     ];
     remote_model.default_reasoning_summary = ReasoningSummary::Detailed;
@@ -414,20 +416,14 @@ async fn remote_models_long_model_slug_is_sent_with_custom_reasoning() -> Result
         .with_config(|config| {
             config.model = Some(requested_model.to_string());
         })
-        .build(&server)
+        .build_with_auto_env(&server)
         .await?;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check model slug".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check model slug".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -443,7 +439,7 @@ async fn remote_models_long_model_slug_is_sent_with_custom_reasoning() -> Result
         .and_then(|reasoning| reasoning.get("summary"))
         .and_then(|value| value.as_str());
     assert_eq!(body["model"].as_str(), Some(requested_model));
-    assert_eq!(reasoning_effort, Some("future"));
+    assert_eq!(reasoning_effort, Some(expected_wire_effort));
     assert_eq!(reasoning_summary, Some("detailed"));
 
     Ok(())
@@ -468,16 +464,10 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
         .await?;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check namespaced model metadata".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check namespaced model metadata".into(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let mut fallback_warning_count = 0;
@@ -527,7 +517,10 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         use_responses_lite: false,
+        node_repl_auto_review_required: false,
+        node_repl_disabled: false,
         auto_review_model_override: None,
+        model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
         priority: 1,
@@ -538,6 +531,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         model_messages: None,
         include_skills_usage_instructions: false,
         include_plugin_usage_instructions: false,
+        include_apps_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -546,7 +540,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
-        supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
         max_context_window: None,
@@ -556,13 +549,17 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         experimental_supported_tools: Vec::new(),
     };
 
-    let models_mock = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![remote_model],
-        },
-    )
-    .await;
+    let mut models_response = serde_json::to_value(ModelsResponse {
+        models: vec![remote_model],
+    })?;
+    models_response["models"][0]["shell_type"] = json!("shell_command");
+    Mock::given(method("GET"))
+        .and(path("/v1/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(models_response))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -582,14 +579,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     assert_eq!(available_model.model, REMOTE_MODEL_SLUG);
 
-    let requests = models_mock.requests();
-    assert_eq!(
-        requests.len(),
-        1,
-        "expected a single /models refresh request for the remote models feature"
-    );
-    assert_eq!(requests[0].url.path(), "/v1/models");
-
     let model_info = models_manager
         .get_model_info(REMOTE_MODEL_SLUG, &config.to_models_manager_config())
         .await;
@@ -597,7 +586,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     core_test_support::submit_thread_settings(
         &codex,
-        codex_protocol::protocol::ThreadSettingsOverrides {
+        ThreadSettingsOverrides {
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             ..Default::default()
         },
@@ -621,29 +610,26 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             ev_completed("resp-2"),
         ]),
     ];
-    mount_sse_sequence(&server, responses).await;
+    let response_mock = mount_sse_sequence(&server, responses).await;
 
     let cwd_path = cwd.abs();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "run call".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Auto),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     let begin_event = wait_for_event_match(&codex, |msg| match msg {
@@ -655,6 +641,24 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     assert_eq!(begin_event.source, ExecCommandSource::UnifiedExecStartup);
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = response_mock
+        .requests()
+        .into_iter()
+        .next()
+        .expect("remote model should receive an inference request");
+    let body = request.body_json();
+    let tools = body["tools"]
+        .as_array()
+        .expect("remote model tools should be present");
+    for tool_name in ["exec_command", "write_stdin"] {
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"].as_str() == Some(tool_name)),
+            "legacy remote model metadata should expose {tool_name}: {tools:?}"
+        );
+    }
 
     Ok(())
 }
@@ -774,14 +778,17 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
         }],
-        shell_type: ConfigShellToolType::ShellCommand,
+        shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         use_responses_lite: false,
+        node_repl_auto_review_required: false,
+        node_repl_disabled: false,
         auto_review_model_override: None,
+        model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
         priority: 1,
@@ -796,10 +803,13 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
             collaboration_modes: None,
             auto_review: None,
             permissions: None,
+            multi_agent: None,
             token_budget: None,
+            guardian_v2: None,
         }),
         include_skills_usage_instructions: false,
         include_plugin_usage_instructions: false,
+        include_apps_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -808,7 +818,6 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
-        supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
         max_context_window: None,
@@ -868,30 +877,27 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "hello base".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_path.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Auto),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     core_test_support::submit_thread_settings(
         &codex,
-        codex_protocol::protocol::ThreadSettingsOverrides {
+        ThreadSettingsOverrides {
             model: Some(model.to_string()),
             ..Default::default()
         },
@@ -901,23 +907,20 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd_path.as_path());
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: "hello remote".into(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 summary: Some(ReasoningSummary::Auto),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -1357,14 +1360,17 @@ fn test_remote_model_with_policy(
             effort: ReasoningEffort::Medium,
             description: ReasoningEffort::Medium.to_string(),
         }],
-        shell_type: ConfigShellToolType::ShellCommand,
+        shell_type: ConfigShellToolType::UnifiedExec,
         visibility,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         use_responses_lite: false,
+        node_repl_auto_review_required: false,
+        node_repl_disabled: false,
         auto_review_model_override: None,
+        model_specialty: None,
         tool_mode: None,
         multi_agent_version: None,
         priority,
@@ -1375,6 +1381,7 @@ fn test_remote_model_with_policy(
         model_messages: None,
         include_skills_usage_instructions: false,
         include_plugin_usage_instructions: false,
+        include_apps_usage_instructions: false,
         supports_reasoning_summary_parameter: true,
         default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
@@ -1383,7 +1390,6 @@ fn test_remote_model_with_policy(
         apply_patch_tool_type: None,
         web_search_tool_type: Default::default(),
         truncation_policy,
-        supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
         max_context_window: None,

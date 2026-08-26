@@ -66,7 +66,6 @@ fn remote_model_with_visibility(
             "default_verbosity": null,
             "apply_patch_tool_type": null,
             "truncation_policy": {"mode": "bytes", "limit": 10_000},
-            "supports_parallel_tool_calls": false,
             "supports_image_detail_original": false,
             "context_window": 272_000,
             "max_context_window": 272_000,
@@ -89,8 +88,6 @@ fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
 struct TestModelsEndpoint {
     has_command_auth: bool,
     uses_codex_backend: bool,
-    supports_unauthenticated_model_catalog: bool,
-    model_catalog_is_authoritative: bool,
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
     observed_proxy_policy: Mutex<Option<OutboundProxyPolicy>>,
@@ -190,8 +187,6 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: true,
-            supports_unauthenticated_model_catalog: false,
-            model_catalog_is_authoritative: false,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
             observed_proxy_policy: Mutex::new(None),
@@ -202,20 +197,6 @@ impl TestModelsEndpoint {
         Arc::new(Self {
             has_command_auth: false,
             uses_codex_backend: false,
-            supports_unauthenticated_model_catalog: false,
-            model_catalog_is_authoritative: false,
-            responses: Mutex::new(responses.into()),
-            fetch_count: AtomicUsize::new(0),
-            observed_proxy_policy: Mutex::new(None),
-        })
-    }
-
-    fn authoritative_unauthenticated(responses: Vec<Vec<ModelInfo>>) -> Arc<Self> {
-        Arc::new(Self {
-            has_command_auth: false,
-            uses_codex_backend: false,
-            supports_unauthenticated_model_catalog: true,
-            model_catalog_is_authoritative: true,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
             observed_proxy_policy: Mutex::new(None),
@@ -284,14 +265,6 @@ impl ModelsEndpointClient for TestModelsEndpoint {
 
     fn uses_codex_backend(&self) -> ModelsEndpointFuture<'_, bool> {
         Box::pin(async { self.uses_codex_backend })
-    }
-
-    fn supports_unauthenticated_model_catalog(&self) -> bool {
-        self.supports_unauthenticated_model_catalog
-    }
-
-    fn model_catalog_is_authoritative(&self) -> bool {
-        self.model_catalog_is_authoritative
     }
 
     fn list_models<'a>(
@@ -603,6 +576,7 @@ c2ln",
         agent_identity: None,
         personal_access_token: None,
         bedrock_api_key: None,
+        bedrock_access_keys: None,
     };
     std::fs::create_dir_all(codex_home).expect("codex home should be created");
     std::fs::write(
@@ -755,6 +729,29 @@ async fn get_model_info_tracks_fallback_usage() {
 }
 
 #[tokio::test]
+async fn get_model_info_applies_long_context_override_to_bundled_gpt_5_6_models() {
+    let codex_home = tempdir().expect("temp dir");
+    let manager = openai_manager_for_tests(
+        codex_home.path().to_path_buf(),
+        TestModelsEndpoint::new(Vec::new()),
+    );
+    let config = ModelsManagerConfig {
+        model_context_window: Some(1_000_000),
+        ..Default::default()
+    };
+
+    for slug in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        let model_info = manager.get_model_info(slug, &config).await;
+        let mut expected = manager
+            .get_model_info(slug, &ModelsManagerConfig::default())
+            .await;
+        expected.context_window = Some(872_000);
+
+        assert_eq!(model_info, expected);
+    }
+}
+
+#[tokio::test]
 async fn get_model_info_uses_custom_catalog() {
     let config = ModelsManagerConfig::default();
     let mut overlay = remote_model("gpt-overlay", "Overlay", /*priority*/ 0);
@@ -772,7 +769,6 @@ async fn get_model_info_uses_custom_catalog() {
     assert_eq!(model_info.display_name, "Overlay");
     assert_eq!(model_info.context_window, Some(272_000));
     assert!(model_info.supports_image_detail_original);
-    assert!(!model_info.supports_parallel_tool_calls);
     assert!(!model_info.used_fallback_model_metadata);
 }
 
@@ -1017,8 +1013,6 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
     let endpoint = Arc::new(TestModelsEndpoint {
         has_command_auth: true,
         uses_codex_backend: false,
-        supports_unauthenticated_model_catalog: false,
-        model_catalog_is_authoritative: false,
         responses: Mutex::new(vec![remote_models.clone()].into()),
         fetch_count: AtomicUsize::new(0),
         observed_proxy_policy: Mutex::new(None),
@@ -1074,42 +1068,6 @@ async fn refresh_available_models_uses_cache_when_fresh() {
         endpoint.fetch_count(),
         1,
         "cache hit should avoid a second model fetch"
-    );
-}
-
-#[tokio::test]
-async fn refresh_available_models_refetches_authoritative_unauthenticated_catalog() {
-    let initial_models = vec![remote_model("local-old", "Local Old", /*priority*/ 1)];
-    let updated_models = vec![remote_model("local-new", "Local New", /*priority*/ 2)];
-    let codex_home = tempdir().expect("temp dir");
-    let endpoint = TestModelsEndpoint::authoritative_unauthenticated(vec![
-        initial_models.clone(),
-        updated_models.clone(),
-    ]);
-    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
-
-    manager
-        .refresh_available_models(
-            RefreshStrategy::OnlineIfUncached,
-            &DEFAULT_HTTP_CLIENT_FACTORY,
-        )
-        .await
-        .expect("initial refresh succeeds");
-    assert_eq!(manager.get_remote_models().await, initial_models);
-
-    manager
-        .refresh_available_models(
-            RefreshStrategy::OnlineIfUncached,
-            &DEFAULT_HTTP_CLIENT_FACTORY,
-        )
-        .await
-        .expect("second refresh succeeds");
-
-    assert_eq!(manager.get_remote_models().await, updated_models);
-    assert_eq!(
-        endpoint.fetch_count(),
-        2,
-        "authoritative local catalogs should not be replaced by cache"
     );
 }
 

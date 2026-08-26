@@ -7,6 +7,7 @@ use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
@@ -24,7 +25,13 @@ use crate::tools::parallel::ToolCallRuntime;
 pub(super) struct CodeModeDispatchBroker {
     dispatch_tx: async_channel::Sender<DispatchMessage>,
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
-    dispatch_gates: Arc<Mutex<HashMap<CellId, watch::Sender<bool>>>>,
+    dispatch_gates: Arc<Mutex<HashMap<CellId, CellDispatchGate>>>,
+}
+
+struct CellDispatchGate {
+    ready: watch::Sender<bool>,
+    // Keep the original exec item when later waits resume this cell.
+    originating_item_id: Option<ResponseItemId>,
 }
 
 impl CodeModeDispatchBroker {
@@ -37,12 +44,47 @@ impl CodeModeDispatchBroker {
         }
     }
 
-    pub(super) fn mark_cell_ready_for_dispatch(&self, cell_id: &CellId) {
-        dispatch_gate(&self.dispatch_gates, cell_id).send_replace(true);
+    pub(super) fn mark_cell_ready_for_dispatch(
+        &self,
+        cell_id: &CellId,
+        originating_item_id: Option<ResponseItemId>,
+    ) {
+        let ready = {
+            let mut dispatch_gates = self
+                .dispatch_gates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let gate = dispatch_gates
+                .entry(cell_id.clone())
+                .or_insert_with(|| CellDispatchGate {
+                    ready: watch::channel(false).0,
+                    originating_item_id: None,
+                });
+            gate.originating_item_id = originating_item_id;
+            gate.ready.clone()
+        };
+        ready.send_replace(true);
+    }
+
+    pub(super) fn cell_originating_item_id(&self, cell_id: &CellId) -> Option<ResponseItemId> {
+        self.dispatch_gates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(cell_id)
+            .and_then(|gate| gate.originating_item_id.clone())
     }
 
     pub(super) fn close_cell(&self, cell_id: &CellId) {
         remove_dispatch_gate(&self.dispatch_gates, cell_id);
+    }
+
+    pub(super) fn active_cell_ids(&self) -> Vec<CellId> {
+        self.dispatch_gates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
     }
 
     pub(super) fn start_turn_worker(
@@ -105,12 +147,13 @@ impl CodeModeDispatchBroker {
                         }
                         let host = Arc::clone(&host);
                         tokio::spawn(async move {
+                            let invocation =
+                                host.invoke_tool(invocation, cancellation_token.clone());
+                            tokio::pin!(invocation);
                             let response = tokio::select! {
-                                response = host.invoke_tool(
-                                    invocation,
-                                    cancellation_token.clone(),
-                                ) => response,
-                                _ = cancellation_token.cancelled() => return,
+                                biased;
+                                _ = cancellation_token.cancelled() => invocation.await,
+                                response = &mut invocation => response,
                             };
                             let _ = response_tx.send(response);
                         });
@@ -125,7 +168,7 @@ impl CodeModeDispatchBroker {
 }
 
 fn dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    dispatch_gates: &Mutex<HashMap<CellId, CellDispatchGate>>,
     cell_id: &CellId,
 ) -> watch::Sender<bool> {
     let mut dispatch_gates = match dispatch_gates.lock() {
@@ -134,12 +177,16 @@ fn dispatch_gate(
     };
     dispatch_gates
         .entry(cell_id.clone())
-        .or_insert_with(|| watch::channel(false).0)
+        .or_insert_with(|| CellDispatchGate {
+            ready: watch::channel(false).0,
+            originating_item_id: None,
+        })
+        .ready
         .clone()
 }
 
 fn remove_dispatch_gate(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    dispatch_gates: &Mutex<HashMap<CellId, CellDispatchGate>>,
     cell_id: &CellId,
 ) {
     let mut dispatch_gates = match dispatch_gates.lock() {
@@ -150,7 +197,7 @@ fn remove_dispatch_gate(
 }
 
 async fn wait_until_cell_ready_for_dispatch(
-    dispatch_gates: &Mutex<HashMap<CellId, watch::Sender<bool>>>,
+    dispatch_gates: &Mutex<HashMap<CellId, CellDispatchGate>>,
     cell_id: &CellId,
     cancellation_token: &CancellationToken,
 ) -> bool {

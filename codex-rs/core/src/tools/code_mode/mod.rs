@@ -17,13 +17,13 @@ use codex_code_mode::CodeModeSession;
 use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
-use codex_features::Feature;
-use codex_features::Features;
 use codex_protocol::models::FunctionCallOutputContentItem;
+use futures::future::join_all;
 use serde_json::Value as JsonValue;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::CodeModeConfig;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::original_image_detail::sanitize_original_image_detail as sanitize_image_detail_items;
@@ -54,13 +54,6 @@ pub(crate) use wait_handler::CodeModeWaitHandler;
 pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
 pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
-const BUFFERED_EXEC_YIELD_TIME_MS: u64 = 30_000;
-
-pub(crate) fn default_exec_yield_time_override_ms(features: &Features) -> Option<u64> {
-    features
-        .enabled(Feature::CodeModeBufferedExec)
-        .then_some(BUFFERED_EXEC_YIELD_TIME_MS)
-}
 
 /// Returns true for the code-mode `exec` tool in the default namespace.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
@@ -78,15 +71,15 @@ pub(crate) struct CodeModeService {
     session_provider: Arc<dyn CodeModeSessionProvider>,
     availability: Result<(), String>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
-    default_exec_yield_time_override_ms: Option<u64>,
-    shutting_down: AtomicBool,
+    default_exec_yield_time_ms: u64,
+    shutdown_token: CancellationToken,
     unavailable_warning_emitted: AtomicBool,
 }
 
 impl CodeModeService {
     pub(crate) fn new(
         session_provider: Arc<dyn CodeModeSessionProvider>,
-        features: &Features,
+        config: &CodeModeConfig,
     ) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         let availability = session_provider.availability();
@@ -95,8 +88,8 @@ impl CodeModeService {
             session_provider,
             availability,
             dispatch_broker,
-            default_exec_yield_time_override_ms: default_exec_yield_time_override_ms(features),
-            shutting_down: AtomicBool::new(false),
+            default_exec_yield_time_ms: config.default_exec_yield_time_ms,
+            shutdown_token: CancellationToken::new(),
             unavailable_warning_emitted: AtomicBool::new(false),
         }
     }
@@ -129,9 +122,9 @@ impl CodeModeService {
         &self,
         mut request: codex_code_mode::ExecuteRequest,
     ) -> Result<codex_code_mode::StartedCell, String> {
-        if request.yield_time_ms.is_none() {
-            request.yield_time_ms = self.default_exec_yield_time_override_ms;
-        }
+        request
+            .yield_time_ms
+            .get_or_insert(self.default_exec_yield_time_ms);
         self.session().await?.execute(request).await
     }
 
@@ -149,8 +142,25 @@ impl CodeModeService {
         self.session().await?.terminate(cell_id).await
     }
 
+    pub(crate) async fn interrupt_active_cells(&self) {
+        let Some(session) = self.session.get() else {
+            return;
+        };
+        join_all(
+            self.dispatch_broker
+                .active_cell_ids()
+                .into_iter()
+                .map(|cell_id| async move {
+                    if let Err(error) = session.terminate(cell_id.clone()).await {
+                        tracing::warn!(%cell_id, %error, "failed to terminate interrupted code-mode cell");
+                    }
+                }),
+        )
+        .await;
+    }
+
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        self.shutting_down.store(true, Ordering::Release);
+        self.shutdown_token.cancel();
         // Join any initialization already in progress without initializing an unused service.
         match self
             .session
@@ -166,8 +176,20 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
-        self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
+    pub(crate) fn mark_cell_ready_for_dispatch(
+        &self,
+        cell_id: &codex_code_mode::CellId,
+        originating_item_id: Option<codex_protocol::ResponseItemId>,
+    ) {
+        self.dispatch_broker
+            .mark_cell_ready_for_dispatch(cell_id, originating_item_id);
+    }
+
+    pub(crate) fn cell_originating_item_id(
+        &self,
+        cell_id: &codex_code_mode::CellId,
+    ) -> Option<codex_protocol::ResponseItemId> {
+        self.dispatch_broker.cell_originating_item_id(cell_id)
     }
 
     pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {
@@ -196,20 +218,25 @@ impl CodeModeService {
         )
     }
 
-    async fn session(&self) -> Result<Arc<dyn CodeModeSession>, String> {
-        if self.shutting_down.load(Ordering::Acquire) {
+    pub(crate) async fn session(&self) -> Result<Arc<dyn CodeModeSession>, String> {
+        if self.shutdown_token.is_cancelled() {
             return Err("code mode session is shutting down".to_string());
         }
         self.session
             .get_or_try_init(|| async {
-                if self.shutting_down.load(Ordering::Acquire) {
+                if self.shutdown_token.is_cancelled() {
                     return Err("code mode session is shutting down".to_string());
                 }
-                let session = self
-                    .session_provider
-                    .create_session(self.dispatch_broker.clone())
-                    .await?;
-                if self.shutting_down.load(Ordering::Acquire) {
+                let session = tokio::select! {
+                    biased;
+                    _ = self.shutdown_token.cancelled() => {
+                        return Err("code mode session is shutting down".to_string());
+                    }
+                    session = self
+                        .session_provider
+                        .create_session(self.dispatch_broker.clone()) => session?,
+                };
+                if self.shutdown_token.is_cancelled() {
                     let _ = session.shutdown().await;
                     return Err("code mode session is shutting down".to_string());
                 }
@@ -267,7 +294,7 @@ pub(super) async fn handle_runtime_response(
 }
 
 fn sanitize_runtime_image_detail(turn: &TurnContext, items: &mut [FunctionCallOutputContentItem]) {
-    sanitize_image_detail_items(can_request_original_image_detail(&turn.model_info), items);
+    sanitize_image_detail_items(can_request_original_image_detail(turn.model_info()), items);
 }
 
 fn format_script_status(response: &RuntimeResponse) -> String {

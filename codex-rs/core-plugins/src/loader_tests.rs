@@ -1,12 +1,12 @@
 use super::*;
 use crate::manifest::load_plugin_manifest;
 use crate::manifest::load_plugin_manifest_with_format;
+use crate::test_support::test_skill_root_loader;
 use crate::test_support::write_file;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
-use codex_core_skills::loader::MAX_CONCURRENT_ROOT_SCANS;
 use codex_plugin::PluginId;
 use codex_utils_plugins::AGENT_PLUGIN_SCHEMA_URI;
 use pretty_assertions::assert_eq;
@@ -45,6 +45,121 @@ async fn agent_plugin_overlay_apps_are_not_runtime_active() {
     );
 
     assert!(load_plugin_apps(&plugin_root).await.is_empty());
+}
+
+#[tokio::test]
+async fn agent_plugin_codex_mcp_overlay_only_forwards_matching_stdio_server_env_vars() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    write_file(
+        &plugin_root.join("plugin.json"),
+        &format!(
+            r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"plugin","extensions":{{"com.openai":{{"interface":{{"displayName":"Portable"}}}}}}}}"#
+        ),
+    );
+    write_file(
+        &plugin_root.join("mcp.json"),
+        r#"{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "shared": {
+      "type": "stdio",
+      "command": "portable-server",
+      "args": ["portable"],
+      "env": {
+        "DB_PASSWORD": "${DB_PASSWORD}",
+        "API_TOKEN": "portable-token",
+        "REMOTE_ONLY": "${REMOTE_ONLY}",
+        "UNLISTED": "${UNLISTED}"
+      }
+    },
+    "portable-only": {"type": "stdio", "command": "portable-only"}
+  }
+}"#,
+    );
+
+    let mut expected = load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await;
+    let Some(McpServerConfig {
+        transport: McpServerTransportConfig::Stdio { env, env_vars, .. },
+        ..
+    }) = expected.get_mut("shared")
+    else {
+        panic!("expected portable stdio server");
+    };
+    env.as_mut()
+        .expect("portable environment")
+        .remove("DB_PASSWORD");
+    env_vars.extend(["DB_PASSWORD".into(), "API_TOKEN".into()]);
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"legacy-plugin"}"#,
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "shared": {
+      "command": "legacy-server",
+      "args": ["legacy"],
+      "env_vars": ["DB_PASSWORD", "API_TOKEN", {"name": "REMOTE_ONLY", "source": "remote"}]
+    },
+    "legacy-only": {"command": "legacy-only", "env_vars": ["UNLISTED"]}
+  }
+}"#,
+    );
+
+    assert_eq!(
+        load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await,
+        expected
+    );
+}
+
+#[tokio::test]
+async fn agent_plugin_codex_mcp_overlay_supports_inline_legacy_servers_without_portable_env() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let plugin_root = temp_dir.path().join("plugin");
+    write_file(
+        &plugin_root.join("plugin.json"),
+        &format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"plugin"}}"#),
+    );
+    write_file(
+        &plugin_root.join("mcp.json"),
+        r#"{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "shared": {
+      "type": "stdio",
+      "command": "portable-server"
+    }
+  }
+}"#,
+    );
+
+    let mut expected = load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await;
+    let Some(McpServerConfig {
+        transport: McpServerTransportConfig::Stdio { env_vars, .. },
+        ..
+    }) = expected.get_mut("shared")
+    else {
+        panic!("expected portable stdio server");
+    };
+    env_vars.push("TOKEN".into());
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "legacy-plugin",
+  "mcpServers": {
+    "shared": {"command": "legacy-server", "env_vars": ["TOKEN"]}
+  }
+}"#,
+    );
+
+    assert_eq!(
+        load_plugin_mcp_servers(&plugin_root, /*auth_mode*/ None).await,
+        expected
+    );
 }
 
 #[cfg(unix)]
@@ -168,7 +283,7 @@ async fn installed_agent_plugin_uses_isolated_data_root_for_stdio_mcp() {
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
         /*remote_global_catalog_active*/ false,
-        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+        test_skill_root_loader().as_ref(),
     )
     .await;
 
@@ -337,7 +452,7 @@ enabled = true
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
         /*remote_global_catalog_active*/ false,
-        Arc::new(Semaphore::new(MAX_CONCURRENT_ROOT_SCANS)),
+        test_skill_root_loader().as_ref(),
     )
     .await;
     let hooks_only = load_plugins_from_layer_stack_with_scope(
@@ -630,6 +745,9 @@ fn load_plugin_hooks_supports_inline_manifest_hook_list() {
 
 #[test]
 fn materialize_git_subdir_uses_sparse_checkout() {
+    let run_git = |args: &[&str], cwd| super::run_git(args, cwd, PluginGitMode::Manual);
+    let run_git_output =
+        |args: &[&str], cwd| super::run_git_output(args, cwd, PluginGitMode::Manual);
     let codex_home = tempfile::tempdir().expect("create codex home");
     let repo = tempfile::tempdir().expect("create git repo");
     let plugin_dir = repo.path().join("plugins/toolkit");
@@ -678,6 +796,9 @@ fn materialize_git_subdir_uses_sparse_checkout() {
 
 #[test]
 fn materialize_git_source_rejects_sha_that_resolves_to_hostile_default_branch() {
+    let run_git = |args: &[&str], cwd| super::run_git(args, cwd, PluginGitMode::Manual);
+    let run_git_output =
+        |args: &[&str], cwd| super::run_git_output(args, cwd, PluginGitMode::Manual);
     let codex_home = tempfile::tempdir().expect("create codex home");
     let repo = tempfile::tempdir().expect("create git repo");
     run_git(&["init"], Some(repo.path())).expect("init git repo");
