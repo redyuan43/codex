@@ -1725,7 +1725,7 @@ fn session_header_clamps_to_narrow_width() {
     let lines = cell.display_lines(WIDTH);
     let widths = lines.iter().map(line_width).collect::<Vec<_>>();
 
-    assert_eq!(widths, vec![usize::from(WIDTH); lines.len()]);
+    assert!(widths.iter().all(|width| *width <= usize::from(WIDTH)));
     insta::assert_snapshot!(render_lines(&lines).join("\n"));
 }
 

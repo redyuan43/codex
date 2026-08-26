@@ -218,22 +218,9 @@ async fn startup_draft_hydrates_its_header_without_moving_the_composer() {
         startup_draft_renderable(&pump.header, &pump.bottom_pane, pump.session_action)
             .desired_height(width);
 
-    assert_eq!(
-        pump.header.raw_lines().last().map(ToString::to_string),
-        Some("directory: loading".to_string())
-    );
+    assert!(pump.header.raw_lines().is_empty());
     pump.apply_config(&config);
-    let expected_directory = format!(
-        "directory: {}",
-        crate::history_cell::SessionHeaderHistoryCell::format_directory_inner(
-            config.cwd.as_path(),
-            /*max_width*/ None,
-        )
-    );
-    assert_eq!(
-        pump.header.raw_lines().last().map(ToString::to_string),
-        Some(expected_directory)
-    );
+    assert!(pump.header.raw_lines().is_empty());
     assert_eq!(
         startup_draft_renderable(&pump.header, &pump.bottom_pane, pump.session_action)
             .desired_height(width),

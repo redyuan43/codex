@@ -392,6 +392,7 @@ fn parent_owned_command_is_allowed(command: SlashCommand, args: &str) -> bool {
                 | SlashCommand::App
                 | SlashCommand::Side
                 | SlashCommand::Btw
+                | SlashCommand::Agent
                 | SlashCommand::Agents
                 | SlashCommand::MultiAgents
                 | SlashCommand::Vim
@@ -5089,7 +5090,7 @@ mod tests {
             .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .0;
 
-        assert_eq!(result, InputResult::Command(SlashCommand::Agents));
+        assert_eq!(result, InputResult::Command(SlashCommand::Agent));
     }
 
     #[test]

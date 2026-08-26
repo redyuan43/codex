@@ -1,27 +1,24 @@
 ---
 source: tui/src/startup_draft_tests.rs
+assertion_line: 201
 expression: "snapshots.join(\"\\n---\\n\")"
 ---
 resume lookup fallback:
 before:
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+  o----.
+     .-'  siyuan
+  .-'
+  '----o
   Resuming session…
 
 › draft while loading
 
 
 after:
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+  o----.
+     .-'  siyuan
+  .-'
+  '----o
 
 
 › draft while loading
@@ -30,24 +27,20 @@ after:
 ---
 fork lookup fallback:
 before:
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+  o----.
+     .-'  siyuan
+  .-'
+  '----o
   Forking session…
 
 › draft while loading
 
 
 after:
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+  o----.
+     .-'  siyuan
+  .-'
+  '----o
 
 
 › draft while loading
@@ -58,12 +51,10 @@ resume picker cancellation:
 before:
 hidden while picker owns input
 after:
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+  o----.
+     .-'  siyuan
+  .-'
+  '----o
 
 
 › Ask Codex to do anything
@@ -74,12 +65,10 @@ fork picker cancellation:
 before:
 hidden while picker owns input
 after:
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+  o----.
+     .-'  siyuan
+  .-'
+  '----o
 
 
 › Ask Codex to do anything

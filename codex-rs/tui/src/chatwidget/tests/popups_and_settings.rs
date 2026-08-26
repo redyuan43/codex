@@ -3763,9 +3763,9 @@ async fn slash_model_up_switches_to_next_stronger_model() {
 
 #[tokio::test]
 async fn slash_shortcuts_report_bounds_without_persisting() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.6-sol")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Ultra));
 
     chat.dispatch_command(SlashCommand::ThinkMore);
     chat.dispatch_command(SlashCommand::ModelUp);

@@ -287,7 +287,7 @@ impl ChatWidget {
 fn concrete_model_presets(models: Vec<ModelPreset>) -> Vec<ModelPreset> {
     models
         .into_iter()
-        .filter(|preset| preset.show_in_picker && !preset.model.starts_with("codex-auto-"))
+        .filter(|preset| !preset.model.starts_with("codex-auto-"))
         .collect()
 }
 
