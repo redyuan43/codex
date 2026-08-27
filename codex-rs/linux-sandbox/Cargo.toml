@@ -1,17 +1,17 @@
 [package]
-name = "codex-linux-sandbox"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
+name = "codex-linux-sandbox"
+version.workspace = true
 
 [[bin]]
 name = "codex-linux-sandbox"
 path = "src/main.rs"
 
 [lib]
+doctest = false
 name = "codex_linux_sandbox"
 path = "src/lib.rs"
-doctest = false
 
 [lints]
 workspace = true
@@ -44,3 +44,14 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+
+# codex-core (which carries the vendored openssl config for musl) is only a
+# dev-dependency here, so the openssl-sys that the sandbox pulls in via
+# codex-http-client -> native-tls would otherwise try to find a system
+# OpenSSL during musl cross builds. Build OpenSSL from source for musl builds
+# to match codex-core.
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
