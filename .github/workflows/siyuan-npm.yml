@@ -275,17 +275,24 @@ jobs:
       - name: Smoke test npm tarballs
         run: |
           set -euo pipefail
-          expected=(x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin)
-          for target in "${expected[@]}"; do
-            tarball="dist/siyuan-npm/siyuan-codex-${target}-${VERSION}.tgz"
+          # platform package name -> target triple (vendor dir layout inside the tarball)
+          declare -A packages=(
+            [siyuan-codex-linux-x64]=x86_64-unknown-linux-musl
+            [siyuan-codex-linux-arm64]=aarch64-unknown-linux-musl
+            [siyuan-codex-darwin-x64]=x86_64-apple-darwin
+            [siyuan-codex-darwin-arm64]=aarch64-apple-darwin
+          )
+          for pkg in "${!packages[@]}"; do
+            target="${packages[$pkg]}"
+            tarball="dist/siyuan-npm/${pkg}-${VERSION}.tgz"
             test -f "$tarball"
-            rm -rf "$RUNNER_TEMP/smoke-$target"
-            mkdir -p "$RUNNER_TEMP/smoke-$target"
-            tar -xzf "$tarball" -C "$RUNNER_TEMP/smoke-$target"
-            test -x "$RUNNER_TEMP/smoke-$target/package/vendor/${target}/codex/codex"
+            rm -rf "$RUNNER_TEMP/smoke-$pkg"
+            mkdir -p "$RUNNER_TEMP/smoke-$pkg"
+            tar -xzf "$tarball" -C "$RUNNER_TEMP/smoke-$pkg"
+            test -x "$RUNNER_TEMP/smoke-$pkg/package/vendor/${target}/codex/codex"
           done
           # Run the linux-x64 binary natively on this runner.
-          "$RUNNER_TEMP/smoke-x86_64-unknown-linux-musl/package/vendor/x86_64-unknown-linux-musl/codex/codex" --version
+          "$RUNNER_TEMP/smoke-siyuan-codex-linux-x64/package/vendor/x86_64-unknown-linux-musl/codex/codex" --version
           # Root wrapper tarball carries the launcher and platform optionalDependencies.
           test -f "dist/siyuan-npm/siyuan-codex-${VERSION}.tgz"
 
