@@ -272,13 +272,22 @@ jobs:
             --target aarch64-apple-darwin \
             --output-dir dist/siyuan-npm
 
-      - name: Smoke test npm tarball
+      - name: Smoke test npm tarballs
         run: |
           set -euo pipefail
-          prefix="$RUNNER_TEMP/siyuan-codex-prefix"
-          npm install -g "dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz" --prefix "$prefix"
-          "$prefix/bin/siyuan" --version
-          "$prefix/bin/codex" --version
+          expected=(x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-apple-darwin aarch64-apple-darwin)
+          for target in "${expected[@]}"; do
+            tarball="dist/siyuan-npm/siyuan-codex-${target}-${VERSION}.tgz"
+            test -f "$tarball"
+            rm -rf "$RUNNER_TEMP/smoke-$target"
+            mkdir -p "$RUNNER_TEMP/smoke-$target"
+            tar -xzf "$tarball" -C "$RUNNER_TEMP/smoke-$target"
+            test -x "$RUNNER_TEMP/smoke-$target/package/vendor/${target}/codex/codex"
+          done
+          # Run the linux-x64 binary natively on this runner.
+          "$RUNNER_TEMP/smoke-x86_64-unknown-linux-musl/package/vendor/x86_64-unknown-linux-musl/codex/codex" --version
+          # Root wrapper tarball carries the launcher and platform optionalDependencies.
+          test -f "dist/siyuan-npm/siyuan-codex-${VERSION}.tgz"
 
       - name: Stage executable release assets
         run: |
@@ -332,16 +341,23 @@ jobs:
         run: |
           set -euo pipefail
           release_tag="siyuan-v${VERSION}"
-          tarball="dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz"
+          root_tarball="dist/siyuan-npm/siyuan-codex-${VERSION}.tgz"
           notes_file="$RUNNER_TEMP/siyuan-release-notes.md"
           cat > "$notes_file" <<EOF
-          Siyuan Codex npm tarball for Linux (x64, ARM64) and macOS (x64, ARM64).
+          Siyuan Codex npm packages for Linux (x64, ARM64) and macOS (x64, ARM64).
 
-          Install:
+          Install (root wrapper, pulls in the platform package for your machine):
 
           \`\`\`bash
-          npm install -g https://github.com/redyuan43/codex/releases/download/${release_tag}/siyuan-codex-npm-${VERSION}.tgz
+          npm install -g https://github.com/redyuan43/codex/releases/download/${release_tag}/siyuan-codex-${VERSION}.tgz
           \`\`\`
+
+          Platform packages:
+
+          - siyuan-codex-linux-x64-${VERSION}.tgz
+          - siyuan-codex-linux-arm64-${VERSION}.tgz
+          - siyuan-codex-darwin-x64-${VERSION}.tgz
+          - siyuan-codex-darwin-arm64-${VERSION}.tgz
 
           Direct executable downloads are also attached:
 
@@ -369,7 +385,7 @@ jobs:
             exit 1
           fi
 
-          gh release create "$release_tag" "$tarball" dist/siyuan-release-assets/* \
+          gh release create "$release_tag" "$root_tarball" dist/siyuan-npm/siyuan-codex-*-"${VERSION}".tgz dist/siyuan-release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Siyuan Codex ${VERSION}" \
@@ -379,4 +395,11 @@ jobs:
         if: ${{ vars.SIYUAN_PUBLISH_NPM == 'true' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish "dist/siyuan-npm/siyuan-codex-npm-${VERSION}.tgz" --access public
+        run: |
+          set -euo pipefail
+          # Publish the platform packages first so the root wrapper's
+          # optionalDependencies resolve, then publish the root wrapper last.
+          for pkg in siyuan-codex-linux-x64 siyuan-codex-linux-arm64 siyuan-codex-darwin-x64 siyuan-codex-darwin-arm64; do
+            npm publish "dist/siyuan-npm/${pkg}-${VERSION}.tgz" --access public
+          done
+          npm publish "dist/siyuan-npm/siyuan-codex-${VERSION}.tgz" --access public
