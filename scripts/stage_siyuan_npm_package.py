@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Stage and pack a Linux self-contained siyuan Codex npm package."""
+"""Stage and pack a self-contained siyuan Codex npm package for Linux and macOS."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TARGET_TRIPLE = "x86_64-unknown-linux-musl"
 CPU_BY_TARGET_TRIPLE = {
     "x86_64-unknown-linux-musl": "x64",
     "aarch64-unknown-linux-musl": "arm64",
+    "x86_64-apple-darwin": "x64",
+    "aarch64-apple-darwin": "arm64",
 }
 PACKAGE_NAME = "siyuan-codex"
 
@@ -71,10 +72,15 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
 
 def write_package_json(staging_dir: Path, version: str, targets: list[str]) -> None:
     cpus = sorted({CPU_BY_TARGET_TRIPLE[target] for target in targets})
+    os_list = []
+    if any(target.endswith("-linux-musl") for target in targets):
+        os_list.append("linux")
+    if any(target.endswith("-apple-darwin") for target in targets):
+        os_list.append("darwin")
     package_json = {
         "name": PACKAGE_NAME,
         "version": version,
-        "description": "Siyuan-branded Codex CLI for Linux.",
+        "description": "Siyuan-branded Codex CLI.",
         "license": "Apache-2.0",
         "type": "module",
         "bin": {
@@ -94,9 +100,7 @@ def write_package_json(staging_dir: Path, version: str, targets: list[str]) -> N
             "type": "git",
             "url": "git+https://github.com/redyuan43/codex.git",
         },
-        "os": [
-            "linux",
-        ],
+        "os": os_list,
         "cpu": cpus,
     }
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
@@ -125,9 +129,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.join(__dirname, "..");
 
-const TARGET_BY_ARCH = {
-  x64: "x86_64-unknown-linux-musl",
-  arm64: "aarch64-unknown-linux-musl",
+const TARGET_BY_PLATFORM_AND_ARCH = {
+  linux: {
+    x64: "x86_64-unknown-linux-musl",
+    arm64: "aarch64-unknown-linux-musl",
+  },
+  darwin: {
+    x64: "x86_64-apple-darwin",
+    arm64: "aarch64-apple-darwin",
+  },
 };
 
 function unsupportedPlatformError() {
@@ -137,11 +147,12 @@ function unsupportedPlatformError() {
 }
 
 function findBundledCodex() {
-  if (process.platform !== "linux") {
+  const platformTargets = TARGET_BY_PLATFORM_AND_ARCH[process.platform];
+  if (!platformTargets) {
     throw unsupportedPlatformError();
   }
 
-  const targetTriple = TARGET_BY_ARCH[process.arch];
+  const targetTriple = platformTargets[process.arch];
   if (!targetTriple) {
     throw unsupportedPlatformError();
   }
@@ -205,7 +216,7 @@ def stage_sources(
     for target in targets:
         target_vendor = vendor_root.resolve() / target
         if not target_vendor.exists():
-            raise RuntimeError(f"Missing Linux vendor target: {target_vendor}")
+            raise RuntimeError(f"Missing vendor target: {target_vendor}")
         if not (target_vendor / "codex" / "codex").exists():
             raise RuntimeError(
                 "Missing Codex binary in vendor target: "
